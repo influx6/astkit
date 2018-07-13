@@ -62,6 +62,16 @@ func (cg *Cg) init() error {
 	return nil
 }
 
+// Import returns the build.Package for target import path.
+func (c Cg) Import(ctxt *build.Context, importPath, fromDir string, mode build.ImportMode) (*build.Package, error) {
+	if c.Importer != nil {
+		if loaded, err := c.Importer(ctxt, importPath, fromDir, mode); err == nil {
+			return loaded, nil
+		}
+	}
+	return ctxt.Import(importPath, fromDir, mode)
+}
+
 // Load takes a giving package path which it parses
 // returning a structure containing all related filesets
 // and parsed AST.
@@ -70,16 +80,13 @@ func Load(pkg string, c Cg) (*loader.Program, error) {
 		return nil, err
 	}
 
-	var t transformer
-	t.C = c
-
 	build := build.Default
 	build.GOPATH = c.GoPath
 	build.GOROOT = c.GoRuntime
 
 	var lconfig loader.Config
 	lconfig.Build = &build
-	lconfig.FindPackage = t.Import
+	lconfig.FindPackage = c.Import
 	lconfig.ParserMode = parser.ParseComments
 
 	// Add internal packages that should be loaded
@@ -114,18 +121,4 @@ func Load(pkg string, c Cg) (*loader.Program, error) {
 	}
 
 	return program, nil
-}
-
-type transformer struct {
-	C Cg
-}
-
-// Import returns the build.Package for target import path.
-func (t transformer) Import(ctxt *build.Context, importPath, fromDir string, mode build.ImportMode) (*build.Package, error) {
-	if t.C.Importer != nil {
-		if loaded, err := t.C.Importer(ctxt, importPath, fromDir, mode); err == nil {
-			return loaded, nil
-		}
-	}
-	return ctxt.Import(importPath, fromDir, mode)
 }
