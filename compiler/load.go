@@ -1,11 +1,14 @@
 package compiler
 
 import (
+	"go/ast"
 	"go/build"
 
 	"go/parser"
 
 	"path/filepath"
+
+	"os"
 
 	"gitlab.com/gokit/astkit/internal/runtime"
 	"golang.org/x/tools/go/loader"
@@ -21,6 +24,20 @@ type Cg struct {
 	// GoRuntime sets the GOROOT path to be used to indicate
 	// the location of the Go runtime source.
 	GoRuntime string
+
+	// PackgeDir sets the absolute path to be used for resolving
+	// relative path names by the loader.Config. It is used to
+	// set the loader.Config.Cwd.
+	PackageDir string
+
+	// Errors allows setting the loader.Config.AllowErrors flag
+	// to allow processing of package sources even if errors
+	// exists.
+	Errors bool
+
+	// Build defines the build context to be used for parsing
+	// package files.
+	Build *build.Context
 
 	// WithTests indicate if tests for the main
 	// package should be loaded.
@@ -50,9 +67,17 @@ type Cg struct {
 	// from Golang defined layout. If an error is returned then fallback
 	// is done to use build.Context.Import.
 	Importer func(ctx *build.Context, importPath string, fromDir string, mode build.ImportMode) (*build.Package, error)
+
+	// AfterTypeCheck provides a hook to listen for latest files added after
+	// parser has finished type checking for a giving package.
+	AfterTypeCheck func(info *loader.PackageInfo, files []*ast.File)
 }
 
 func (cg *Cg) init() error {
+	if cg.PackageDir == "" {
+		dir, _ := os.Getwd()
+		cg.PackageDir = dir
+	}
 	if cg.GoPath == "" {
 		cg.GoPath = runtime.GoPath()
 	}
@@ -80,13 +105,20 @@ func Load(pkg string, c Cg) (*loader.Program, error) {
 		return nil, err
 	}
 
-	build := build.Default
-	build.GOPATH = c.GoPath
-	build.GOROOT = c.GoRuntime
+	mybuild := c.Build
+	if c.Build == nil {
+		bo := build.Default
+		bo.GOPATH = c.GoPath
+		bo.GOROOT = c.GoRuntime
+		mybuild = &bo
+	}
 
 	var lconfig loader.Config
-	lconfig.Build = &build
+	lconfig.Build = mybuild
+	lconfig.Cwd = c.PackageDir
+	lconfig.AllowErrors = c.Errors
 	lconfig.FindPackage = c.Import
+	lconfig.AfterTypeCheck = c.AfterTypeCheck
 	lconfig.ParserMode = parser.ParseComments
 
 	// Add internal packages that should be loaded
@@ -102,11 +134,21 @@ func Load(pkg string, c Cg) (*loader.Program, error) {
 	// Cg.GoPath if absolute paths.
 	for _, elem := range c.Imports {
 		if !filepath.IsAbs(elem) && runtime.PathExist(runtime.FromGoPath(elem)) {
+			if c.WithTests {
+				lconfig.ImportWithTests(elem)
+				continue
+			}
+
 			lconfig.Import(elem)
 			continue
 		}
 
 		if rel, err := runtime.WithinToGoPath(elem); err == nil {
+			if c.WithTests {
+				lconfig.ImportWithTests(rel)
+				continue
+			}
+
 			lconfig.Import(rel)
 		}
 	}

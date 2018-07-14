@@ -1,5 +1,5 @@
 package astkit
 
-func Transform(pkg string) {
+func Transform(pkg string) ([]definition.Package, error) {
 
 }
