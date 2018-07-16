@@ -14,6 +14,22 @@ import (
 	"golang.org/x/tools/go/loader"
 )
 
+//*********************************************
+// Error
+//*********************************************
+
+// Error implements a custom error type for package to
+// provide consistency and constancy of type and value.
+type Error string
+
+func (e Error) Error() string {
+	return string(e)
+}
+
+//*********************************************
+// Loader
+//*********************************************
+
 // Cg contains configuration values used for generating
 // package structure.
 type Cg struct {
