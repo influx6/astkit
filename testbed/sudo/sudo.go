@@ -1,11 +1,14 @@
 package sudo
 
 import (
+	"fmt"
 	"go/ast"
 	"go/types"
 )
 
+// variables
 var (
+	// Name applies here
 	Name  string
 	Creed int = 10
 	Fall      = 1000
@@ -16,14 +19,19 @@ type Functioner interface {
 	IsAsync() (bool, error)
 	IsVariadic() bool
 	Node() *ast.FuncDecl
-	Rewrite()
-	Params() []string
+	Rewrite(string, int)
+	Params(v string) []string
 	Results() []FunctionResult
 }
 
 type FunctionResult struct {
 	Field string
 	Day   int
+}
+
+func (f FunctionResult) hello() {
+	var name string
+	fmt.Printf("Name : %s", name)
 }
 
 type Function struct {
@@ -41,4 +49,14 @@ type Function struct {
 	params    []string
 	variadic  bool
 	rename    string
+}
+
+func (f Function) hello(n string) {
+	bu := []string{"sasd", n}
+	fmt.Printf("List : %s", bu)
+}
+
+func Hello(n string) {
+	bu := map[string]string{"sasd": n}
+	fmt.Printf("Map : %s", bu)
 }

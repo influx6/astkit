@@ -18,9 +18,8 @@ func TransformWith(pkg string, c compiler.Cg) (*compiler.Package, error) {
 		return nil, err
 	}
 
-	pd, err := compiler.Indexer.Index(pkg, program)
-	if err != nil {
-		return nil, err
-	}
-	return pd, nil
+	var indexer compiler.Indexer
+	indexer.BasePackage = pkg
+	indexer.Program = program
+	return indexer.Index()
 }

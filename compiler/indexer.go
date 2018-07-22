@@ -1,7 +1,6 @@
 package compiler
 
 import (
-	"fmt"
 	"go/ast"
 	"path/filepath"
 
@@ -18,63 +17,63 @@ const (
 	ErrNotFound = Error("target not found")
 )
 
-var (
-	//compiledCache contains cached versions of processed packages.
-	compiledCache = struct {
-		cl    sync.RWMutex
-		cache map[string]*Package
-	}{
-		cache: map[string]*Package{},
-	}
-)
-
-// Indexer exposes a package level AstIndexer.
-var Indexer AstIndexer
-
-// AstIndexer implements a golang ast index which parses
+// Indexer implements a golang ast index which parses
 // a loader.Program returning a Package containing all
 // definitions.
-type AstIndexer struct{}
+type Indexer struct {
+	BasePackage string
+	Program     *loader.Program
+
+	waiter  sync.WaitGroup
+	arw     sync.RWMutex
+	Indexed map[string]*Package
+}
 
 // Index takes provided loader.Program returning a Package containing
 // parsed structures, types and declarations of all packages.
 // It takes the basePkg path as the starting point of indexing, where the
 // Package instance return is the basePkg retrieved from the program.
-func (indexer AstIndexer) Index(basePkg string, p *loader.Program) (*Package, error) {
-	ctxPkg := p.Package(basePkg)
+func (indexer *Indexer) Index() (*Package, error) {
+	ctxPkg := indexer.Program.Package(indexer.BasePackage)
 	if ctxPkg == nil {
 		return nil, ErrNotFound
 	}
 
-	pkg, err := indexer.indexPackage(ctxPkg, p)
+	pkg, err := indexer.indexPackage(indexer.BasePackage, ctxPkg)
 	if err != nil {
 		return nil, err
 	}
 
-	pkg.Name = basePkg
+	pkg.Name = indexer.BasePackage
 	return pkg, nil
 }
 
 // indexPackage takes provided loader.Program returning a Package containing
 // parsed structures, types and declarations of all packages.
-func (indexer AstIndexer) indexPackage(p *loader.PackageInfo, program *loader.Program) (*Package, error) {
+func (indexer *Indexer) indexPackage(targetPackage string, p *loader.PackageInfo) (*Package, error) {
 	pkg := &Package{
-		Meta:    p,
-		Depends: map[string]*Package{},
-		Files:   map[string]*PackageFile{},
+		Meta:       p,
+		Depends:    map[string]*Package{},
+		Files:      map[string]*PackageFile{},
+		Structs:    map[string]*Struct{},
+		Types:      map[string]*AliasType{},
+		Interfaces: map[string]*Interface{},
+		Functions:  map[string]*Function{},
 	}
 
+	indexer.arw.Lock()
+	indexer.Indexed[targetPackage] = pkg
+	indexer.arw.Unlock()
+
+	errs := make(chan error, 0)
+	declrs := make(chan interface{}, 0)
+
+	// Run through all files for package and schedule them to appropriately
+	// send
 	for _, file := range p.Files {
 
-		// process package documentation if available.
-		if file.Doc != nil && pkg.Doc == nil {
-			if err := indexer.doDoc(pkg, file, p, program); err != nil {
-				return pkg, err
-			}
-		}
-
 		pkgFile := new(PackageFile)
-		_, begin, end := compiler.GetPosition(program.Fset, file.Pos(), file.End())
+		_, begin, end := compiler.GetPosition(indexer.Program.Fset, file.Pos(), file.End())
 		if begin.IsValid() {
 			pkgFile.File = filepath.ToSlash(begin.Filename)
 		} else if end.IsValid() {
@@ -85,85 +84,131 @@ func (indexer AstIndexer) indexPackage(p *loader.PackageInfo, program *loader.Pr
 		pkgFile.Dir = filepath.ToSlash(filepath.Dir(pkgFile.File))
 		pkg.Files[pkgFile.File] = pkgFile
 
-		// process all imports within fileset.
-		if err := indexer.doImport(pkg, pkgFile, file, p, program); err != nil {
-			return pkg, err
-		}
+		var scope ParseScope
+		scope.Info = p
+		scope.From = pkg
+		scope.File = file
+		scope.Indexer = indexer
+		scope.Package = pkgFile
+		scope.Program = indexer.Program
 
-		var errz error
-		ast.Inspect(file, func(node ast.Node) bool {
-			next, err := indexer.doInspect(node, file, pkg, p, program)
+		// if file has an associated package-level documentation,
+		// parse it and add to package documentation.
+		if file.Doc != nil {
+			doc, err := scope.handleCommentGroup(file.Doc)
 			if err != nil {
-				errz = err
-				return false
+				errs <- err
+				break
 			}
-			return next
-		})
 
-		if errz != nil {
-			return pkg, errz
+			pkg.Docs = append(pkg.Docs, doc)
+		}
+
+		indexer.waiter.Add(1)
+		go func() {
+			defer indexer.waiter.Done()
+			scope.Parse(declrs, errs)
+		}()
+	}
+
+	var perr error
+
+	// Listen to channels about incoming declarations
+	// or error and return.
+listenLoop:
+	for {
+		select {
+		case declr := <-declrs:
+			if err := pkg.Add(declr); err != nil {
+				perr = err
+				break listenLoop
+			}
+		case perr = <-errs:
+			break listenLoop
 		}
 	}
 
-	return pkg, nil
+	// Ensure all go-routines are done and block
+	// here to simulate sync process.
+	indexer.waiter.Wait()
+
+	return pkg, perr
 }
 
-func (indexer AstIndexer) doInspect(node ast.Node, file *ast.File, from *Package, p *loader.PackageInfo, program *loader.Program) (bool, error) {
-
-	fmt.Printf("Node: %#v\n", node)
-
-	return true, nil
-}
-
-func (indexer AstIndexer) doImportedPackage(imp Import, from *Package, p *loader.PackageInfo, program *loader.Program) error {
-
-	// if dependency is already within package then skip this.
-	if from.HasDependency(imp.Path) {
-		return nil
+func (indexer *Indexer) indexImported(path string, res chan interface{}, errs chan error) {
+	indexer.arw.RLock()
+	if pkg, ok := indexer.Indexed[path]; ok {
+		indexer.arw.RUnlock()
+		res <- pkg
+		return
 	}
+	indexer.arw.RUnlock()
 
-	compiledCache.cl.RLock()
-	if pkg, ok := compiledCache.cache[imp.Path]; ok {
-		compiledCache.cl.RUnlock()
-
-		from.Depends[imp.Path] = pkg
-		return nil
-	}
-	compiledCache.cl.RUnlock()
-
-	imported := program.Package(imp.Path)
+	imported := indexer.Program.Package(path)
 	if imported == nil {
-		return Error("failed to find loaded package: " + imp.Path)
+		errs <- Error("failed to find loaded package: " + path)
+		return
 	}
 
 	// Have imported package indexed so we can add into
 	// dependency map.
-	pkg, err := indexer.indexPackage(imported, program)
+	pkg, err := indexer.indexPackage(path, imported)
 	if err != nil {
-		return err
+		errs <- err
+		return
 	}
 
-	from.Depends[imp.Path] = pkg
-
-	compiledCache.cl.Lock()
-	compiledCache.cache[imp.Path] = pkg
-	compiledCache.cl.Unlock()
-	return nil
+	res <- pkg
 }
 
-func (indexer AstIndexer) doImport(base *Package, baseFile *PackageFile, f *ast.File, p *loader.PackageInfo, program *loader.Program) error {
-	baseFile.Imports = make([]Import, 0, len(f.Imports))
+//******************************************************************************
+// Type ast.Visitor Implementations
+//******************************************************************************
 
-	for _, spec := range f.Imports {
-		length, begin, end := compiler.GetPosition(program.Fset, spec.Pos(), spec.End())
+// ParseScope defines a struct which embodies a current parsing scope
+// related to a giving file, package and program.
+type ParseScope struct {
+	From        *Package
+	File        *ast.File
+	Indexer     *Indexer
+	Package     *PackageFile
+	Program     *loader.Program
+	Info        *loader.PackageInfo
+	GenComments map[*ast.CommentGroup]struct{}
+}
 
-		value := spec.Path.Value
+// Parse runs through all non-comment based declarations within the
+// giving file.
+func (b *ParseScope) Parse(res chan interface{}, errs chan error) {
+
+	if err := b.handleImports(res, errs); err != nil {
+		errs <- err
+		return
+	}
+
+	// Parse all structures first, ensuring to add them into package.
+	for _, declr := range b.File.Decls {
+
+	}
+
+	// Parse comments not attached to any declared structured.
+	if err := b.handleCommentaries(); err != nil {
+		errs <- err
+	}
+}
+
+func (b *ParseScope) handleImports(res chan interface{}, errs chan error) error {
+	for _, dependency := range b.File.Imports {
+		length, begin, end := compiler.GetPosition(b.Program.Fset, dependency.Pos(), dependency.End())
+
+		value := dependency.Path.Value
 		if unquoted, err := strconv.Unquote(value); err == nil {
 			value = unquoted
 		}
 
 		var imp Import
 		imp.Path = value
+		imp.File = begin.Filename
 		imp.Begin = begin.Offset
 		imp.End = end.Offset
 		imp.Length = length
@@ -172,55 +217,71 @@ func (indexer AstIndexer) doImport(base *Package, baseFile *PackageFile, f *ast.
 		imp.Column = begin.Column
 		imp.ColumnEnd = end.Column
 
-		if spec.Name != nil {
-			imp.Alias = spec.Name.Name
+		if dependency.Name != nil {
+			imp.Alias = dependency.Name.Name
 		}
 
 		// Add import into package file list.
-		baseFile.Imports = append(baseFile.Imports, imp)
+		b.Package.Imports = append(b.Package.Imports, imp)
 
-		// Process import package to ensure all package follow suit and
-		// are added internally.
-		if err := indexer.doImportedPackage(imp, base, p, program); err != nil {
-			return err
-		}
+		go b.Indexer.indexImported(imp.Path, res, errs)
+
 	}
-
 	return nil
 }
 
-func (indexer AstIndexer) doCommentary(base *Package, baseFile *PackageFile, f *ast.File, p *loader.PackageInfo, program *loader.Program) error {
-	baseFile.Commentaries = make([]Doc, 0, len(f.Comments))
-	for _, cdoc := range f.Comments {
+func (b *ParseScope) handleStructSpec() {
+
+}
+
+func (b *ParseScope) handleFunctionSpec() {
+
+}
+
+func (b *ParseScope) handleChannelSpec() {
+
+}
+
+func (b *ParseScope) handleValueSpec() {
+
+}
+
+func (b *ParseScope) handleMapSpec() {
+
+}
+
+func (b *ParseScope) handleSliceSpec() {
+
+}
+
+func (b *ParseScope) handleCommentaries() error {
+	for _, cdoc := range b.File.Comments {
+		if _, ok := b.GenComments[cdoc]; ok {
+			continue
+		}
+
 		if cdoc.Text() == "//" {
 			continue
 		}
 
-		doc, err := indexer.doCommentGroup(cdoc, f, program)
+		doc, err := b.handleCommentGroup(cdoc)
 		if err != nil {
 			return err
 		}
-		baseFile.Commentaries = append(baseFile.Commentaries, doc)
+
+		b.Package.Docs = append(b.Package.Docs, doc)
 	}
 	return nil
 }
 
-func (indexer AstIndexer) doDoc(base *Package, f *ast.File, p *loader.PackageInfo, program *loader.Program) error {
-	doc, err := indexer.doCommentGroup(f.Doc, f, program)
-	if err != nil {
-		return err
-	}
-	base.Doc = &doc
-	return nil
-}
-
-func (indexer AstIndexer) doCommentGroup(gdoc *ast.CommentGroup, f *ast.File, program *loader.Program) (Doc, error) {
+func (b *ParseScope) handleCommentGroup(gdoc *ast.CommentGroup) (Doc, error) {
 	var doc Doc
 	doc.Text = gdoc.Text()
 	doc.Parts = make([]DocText, 0, len(gdoc.List))
 
 	// Set the line details of giving commentary.
-	length, begin, end := compiler.GetPosition(program.Fset, gdoc.Pos(), gdoc.End())
+	length, begin, end := compiler.GetPosition(b.Program.Fset, gdoc.Pos(), gdoc.End())
+	doc.File = begin.Filename
 	doc.Begin = begin.Offset
 	doc.End = end.Offset
 	doc.Length = length
@@ -231,16 +292,17 @@ func (indexer AstIndexer) doCommentGroup(gdoc *ast.CommentGroup, f *ast.File, pr
 
 	// Add all commentary text for main doc into list.
 	for _, comment := range gdoc.List {
-		doc.Parts = append(doc.Parts, indexer.doDocText(comment, f, program))
+		doc.Parts = append(doc.Parts, b.handleDocText(comment))
 	}
 
 	return doc, nil
 }
 
-func (indexer AstIndexer) doDocText(c *ast.Comment, f *ast.File, program *loader.Program) DocText {
-	length, begin, end := compiler.GetPosition(program.Fset, c.Pos(), c.End())
+func (b *ParseScope) handleDocText(c *ast.Comment) DocText {
+	length, begin, end := compiler.GetPosition(b.Program.Fset, c.Pos(), c.End())
 
 	var doc DocText
+	doc.File = begin.Filename
 	doc.Text = c.Text
 	doc.Begin = begin.Offset
 	doc.End = end.Offset
@@ -252,14 +314,18 @@ func (indexer AstIndexer) doDocText(c *ast.Comment, f *ast.File, program *loader
 	return doc
 }
 
-func (indexer AstIndexer) getExprName(n interface{}) (string, error) {
+//******************************************************************************
+//  Utilities
+//******************************************************************************
+
+func getExprName(n interface{}) (string, error) {
 	switch t := n.(type) {
 	case *ast.Ident:
 		return t.Name, nil
 	case *ast.BasicLit:
 		return t.Value, nil
 	case *ast.SelectorExpr:
-		return indexer.getExprName(t.X)
+		return getExprName(t.X)
 	default:
 		return "", Error("unable to get name")
 	}
