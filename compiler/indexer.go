@@ -2,11 +2,15 @@ package compiler
 
 import (
 	"go/ast"
-	"path/filepath"
-
 	"strconv"
 
 	"sync"
+
+	"golang.org/x/sync/errgroup"
+
+	"path/filepath"
+
+	"context"
 
 	"gitlab.com/gokit/astkit/internal/compiler"
 	"golang.org/x/tools/go/loader"
@@ -32,31 +36,35 @@ type Indexer struct {
 // Index takes provided loader.Program returning a Package containing
 // parsed structures, types and declarations of all packages.
 // It takes the basePkg path as the starting point of indexing, where the
-// Package instance return is the basePkg retrieved from the program.
-func (indexer *Indexer) Index() (*Package, error) {
+// all imports and structures will be processed and returned as a Package
+// instance pointer. In case of an error occurring, an incomplete
+// package instance pointer and error will be returned.
+func (indexer *Indexer) Index(ctx context.Context) (*Package, error) {
+	if indexer.Indexed == nil {
+		indexer.Indexed = map[string]*Package{}
+	}
+
 	ctxPkg := indexer.Program.Package(indexer.BasePackage)
 	if ctxPkg == nil {
 		return nil, ErrNotFound
 	}
 
-	pkg, err := indexer.indexPackage(indexer.BasePackage, ctxPkg)
-	if err != nil {
-		return nil, err
-	}
+	pkg, err := indexer.indexPackage(ctx, indexer.BasePackage, ctxPkg)
 
-	pkg.Name = indexer.BasePackage
-	return pkg, nil
+	indexer.waiter.Wait()
+	return pkg, err
 }
 
 // indexPackage takes provided loader.Program returning a Package containing
 // parsed structures, types and declarations of all packages.
-func (indexer *Indexer) indexPackage(targetPackage string, p *loader.PackageInfo) (*Package, error) {
+func (indexer *Indexer) indexPackage(ctx context.Context, targetPackage string, p *loader.PackageInfo) (*Package, error) {
 	pkg := &Package{
 		Meta:       p,
+		Name:       targetPackage,
 		Depends:    map[string]*Package{},
 		Files:      map[string]*PackageFile{},
 		Structs:    map[string]*Struct{},
-		Types:      map[string]*AliasType{},
+		Types:      map[string]*Type{},
 		Interfaces: map[string]*Interface{},
 		Functions:  map[string]*Function{},
 	}
@@ -65,8 +73,13 @@ func (indexer *Indexer) indexPackage(targetPackage string, p *loader.PackageInfo
 	indexer.Indexed[targetPackage] = pkg
 	indexer.arw.Unlock()
 
-	errs := make(chan error, 0)
-	declrs := make(chan interface{}, 0)
+	// send package has response after processing.
+	return pkg, indexer.index(ctx, pkg, p)
+}
+
+func (indexer *Indexer) index(ctx context.Context, pkg *Package, p *loader.PackageInfo) error {
+	in := make(chan interface{}, 0)
+	w, ctx := errgroup.WithContext(ctx)
 
 	// Run through all files for package and schedule them to appropriately
 	// send
@@ -97,68 +110,46 @@ func (indexer *Indexer) indexPackage(targetPackage string, p *loader.PackageInfo
 		if file.Doc != nil {
 			doc, err := scope.handleCommentGroup(file.Doc)
 			if err != nil {
-				errs <- err
-				break
+				return err
 			}
 
 			pkg.Docs = append(pkg.Docs, doc)
 		}
 
-		indexer.waiter.Add(1)
-		go func() {
-			defer indexer.waiter.Done()
-			scope.Parse(declrs, errs)
-		}()
+		w.Go(func() error {
+			return scope.Parse(ctx, in)
+		})
 	}
 
-	var perr error
-
-	// Listen to channels about incoming declarations
-	// or error and return.
-listenLoop:
-	for {
-		select {
-		case declr := <-declrs:
-			if err := pkg.Add(declr); err != nil {
-				perr = err
-				break listenLoop
-			}
-		case perr = <-errs:
-			break listenLoop
+	indexer.waiter.Add(1)
+	go func() {
+		defer indexer.waiter.Done()
+		for elem := range in {
+			pkg.Add(elem)
 		}
-	}
+	}()
 
-	// Ensure all go-routines are done and block
-	// here to simulate sync process.
-	indexer.waiter.Wait()
-
-	return pkg, perr
+	err := w.Wait()
+	close(in)
+	return err
 }
 
-func (indexer *Indexer) indexImported(path string, res chan interface{}, errs chan error) {
+func (indexer *Indexer) indexImported(ctx context.Context, path string) (*Package, error) {
 	indexer.arw.RLock()
 	if pkg, ok := indexer.Indexed[path]; ok {
 		indexer.arw.RUnlock()
-		res <- pkg
-		return
+		return pkg, nil
 	}
 	indexer.arw.RUnlock()
 
 	imported := indexer.Program.Package(path)
 	if imported == nil {
-		errs <- Error("failed to find loaded package: " + path)
-		return
+		return nil, Error("failed to find loaded package: " + path)
 	}
 
 	// Have imported package indexed so we can add into
-	// dependency map.
-	pkg, err := indexer.indexPackage(path, imported)
-	if err != nil {
-		errs <- err
-		return
-	}
-
-	res <- pkg
+	// dependency map and send pkg pointer to root.
+	return indexer.indexPackage(ctx, path, imported)
 }
 
 //******************************************************************************
@@ -179,25 +170,25 @@ type ParseScope struct {
 
 // Parse runs through all non-comment based declarations within the
 // giving file.
-func (b *ParseScope) Parse(res chan interface{}, errs chan error) {
-
-	if err := b.handleImports(res, errs); err != nil {
-		errs <- err
-		return
+func (b *ParseScope) Parse(ctx context.Context, in chan interface{}) error {
+	if err := b.handleImports(ctx, in); err != nil {
+		return err
 	}
 
 	// Parse all structures first, ensuring to add them into package.
-	for _, declr := range b.File.Decls {
-
-	}
+	//for _, declr := range b.File.Decls {
+	//
+	//}
 
 	// Parse comments not attached to any declared structured.
 	if err := b.handleCommentaries(); err != nil {
-		errs <- err
+		return nil
 	}
+
+	return nil
 }
 
-func (b *ParseScope) handleImports(res chan interface{}, errs chan error) error {
+func (b *ParseScope) handleImports(ctx context.Context, in chan interface{}) error {
 	for _, dependency := range b.File.Imports {
 		length, begin, end := compiler.GetPosition(b.Program.Fset, dependency.Pos(), dependency.End())
 
@@ -224,8 +215,13 @@ func (b *ParseScope) handleImports(res chan interface{}, errs chan error) error 
 		// Add import into package file list.
 		b.Package.Imports = append(b.Package.Imports, imp)
 
-		go b.Indexer.indexImported(imp.Path, res, errs)
+		pkg, err := b.Indexer.indexImported(ctx, imp.Path)
+		if err != nil {
+			return err
+		}
 
+		//b.From.Add(pkg)
+		in <- pkg
 	}
 	return nil
 }

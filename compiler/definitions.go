@@ -80,10 +80,11 @@ type Package struct {
 
 // Add adds giving declaration into package declaration
 // types according to it's class.
-func (p *Package) Add(declr interface{}) error {
+func (p *Package) Add(declr interface{}) {
 	switch rdeclr := declr.(type) {
+	case *Package:
+		p.Depends[rdeclr.Name] = rdeclr
 	case *Struct:
-
 	case *Function:
 	case *Map:
 	case *Slice:
@@ -92,7 +93,6 @@ func (p *Package) Add(declr interface{}) error {
 	case *Constant:
 		p.Constants = append(p.Constants, rdeclr)
 	}
-	return nil
 }
 
 // Resolve provides the list of indexed packages to internal structures
