@@ -3,12 +3,17 @@ package compiler
 import (
 	"fmt"
 	"go/ast"
-	"path/filepath"
 	"strings"
 
 	"strconv"
 
 	"sync"
+
+	"golang.org/x/sync/errgroup"
+
+	"path/filepath"
+
+	"context"
 
 	"gitlab.com/gokit/astkit/internal/compiler"
 	"golang.org/x/tools/go/loader"
@@ -40,16 +45,21 @@ type Indexer struct {
 // of the Resolve(map[string]*Package) method.
 // if an error occurred during resolution then the indexed package, map
 // of other indexed packages and the error that occurred is returned.
-func (indexer *Indexer) Index() (*Package, map[string]*Package, error) {
+// all imports and structures will be processed and returned as a Package
+// instance pointer. In case of an error occurring, an incomplete
+// package instance pointer and error will be returned.
+func (indexer *Indexer) Index(ctx context.Context) (*Package, map[string]*Package, error) {
+	if indexer.indexed == nil {
+		indexer.indexed = map[string]*Package{}
+	}
+
 	ctxPkg := indexer.Program.Package(indexer.BasePackage)
 	if ctxPkg == nil {
 		return nil, nil, ErrNotFound
 	}
 
-	indexer.indexed = map[string]*Package{}
-
 	// Run initial package and dependencies indexing.
-	pkg, err := indexer.indexPackage(indexer.BasePackage, ctxPkg)
+	pkg, err := indexer.indexPackage(ctx, indexer.BasePackage, ctxPkg)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -70,7 +80,7 @@ func (indexer *Indexer) Index() (*Package, map[string]*Package, error) {
 
 // indexPackage takes provided loader.Program returning a Package containing
 // parsed structures, types and declarations of all packages.
-func (indexer *Indexer) indexPackage(targetPackage string, p *loader.PackageInfo) (*Package, error) {
+func (indexer *Indexer) indexPackage(ctx context.Context, targetPackage string, p *loader.PackageInfo) (*Package, error) {
 	pkg := &Package{
 		Meta:       p,
 		Name:       targetPackage,
@@ -86,8 +96,13 @@ func (indexer *Indexer) indexPackage(targetPackage string, p *loader.PackageInfo
 	indexer.indexed[targetPackage] = pkg
 	indexer.arw.Unlock()
 
-	errs := make(chan error, 0)
-	declrs := make(chan interface{}, 0)
+	// send package has response after processing.
+	return pkg, indexer.index(ctx, pkg, p)
+}
+
+func (indexer *Indexer) index(ctx context.Context, pkg *Package, p *loader.PackageInfo) error {
+	in := make(chan interface{}, 0)
+	w, ctx := errgroup.WithContext(ctx)
 
 	// Run through all files for package and schedule them to appropriately
 	// send
@@ -117,68 +132,46 @@ func (indexer *Indexer) indexPackage(targetPackage string, p *loader.PackageInfo
 		if file.Doc != nil {
 			doc, err := scope.handleCommentGroup(file.Doc)
 			if err != nil {
-				errs <- err
-				break
+				return err
 			}
 
 			pkg.Docs = append(pkg.Docs, doc)
 		}
 
-		indexer.waiter.Add(1)
-		go func() {
-			defer indexer.waiter.Done()
-			scope.Parse(declrs, errs)
-		}()
+		w.Go(func() error {
+			return scope.Parse(ctx, in)
+		})
 	}
 
-	var perr error
-
-	// Listen to channels about incoming declarations
-	// or error and return.
-listenLoop:
-	for {
-		select {
-		case declr := <-declrs:
-			if err := pkg.Add(declr); err != nil {
-				perr = err
-				break listenLoop
-			}
-		case perr = <-errs:
-			break listenLoop
+	indexer.waiter.Add(1)
+	go func() {
+		defer indexer.waiter.Done()
+		for elem := range in {
+			pkg.Add(elem)
 		}
-	}
+	}()
 
-	// Ensure all go-routines are done and block
-	// here to simulate sync process.
-	indexer.waiter.Wait()
-
-	return pkg, perr
+	err := w.Wait()
+	close(in)
+	return err
 }
 
-func (indexer *Indexer) indexImported(path string, res chan interface{}, errs chan error) {
+func (indexer *Indexer) indexImported(ctx context.Context, path string) (*Package, error) {
 	indexer.arw.RLock()
 	if pkg, ok := indexer.indexed[path]; ok {
 		indexer.arw.RUnlock()
-		res <- pkg
-		return
+		return pkg, nil
 	}
 	indexer.arw.RUnlock()
 
 	imported := indexer.Program.Package(path)
 	if imported == nil {
-		errs <- Error("failed to find loaded package: " + path)
-		return
+		return nil, Error("failed to find loaded package: " + path)
 	}
 
 	// Have imported package indexed so we can add into
-	// dependency map.
-	pkg, err := indexer.indexPackage(path, imported)
-	if err != nil {
-		errs <- err
-		return
-	}
-
-	res <- pkg
+	// dependency map and send pkg pointer to root.
+	return indexer.indexPackage(ctx, path, imported)
 }
 
 //******************************************************************************
@@ -199,21 +192,16 @@ type ParseScope struct {
 
 // Parse runs through all non-comment based declarations within the
 // giving file.
-func (b *ParseScope) Parse(res chan interface{}, errs chan error) {
-	if err := b.handleImports(res, errs); err != nil {
-		errs <- err
-		return
+func (b *ParseScope) Parse(ctx context.Context, in chan interface{}) error {
+	if err := b.handleImports(ctx, in); err != nil {
+		return err
 	}
 
 	// Parse all structures first, ensuring to add them into package.
 	for _, declr := range b.File.Decls {
 		switch elem := declr.(type) {
 		case *ast.FuncDecl:
-			_ = elem
-			//if err := b.handleFunctionSpec(elem, res); err != nil {
-			//	errs <- err
-			//	return
-			//}
+			return b.handleFunctionSpec(elem, in)
 		case *ast.GenDecl:
 		case *ast.BadDecl:
 			// Do nothing...
@@ -222,11 +210,13 @@ func (b *ParseScope) Parse(res chan interface{}, errs chan error) {
 
 	// Parse comments not attached to any declared structured.
 	if err := b.handleCommentaries(); err != nil {
-		errs <- err
+		return nil
 	}
+
+	return nil
 }
 
-func (b *ParseScope) handleImports(res chan interface{}, errs chan error) error {
+func (b *ParseScope) handleImports(ctx context.Context, in chan interface{}) error {
 	for _, dependency := range b.File.Imports {
 		length, begin, end := compiler.GetPosition(b.Program.Fset, dependency.Pos(), dependency.End())
 
@@ -256,8 +246,12 @@ func (b *ParseScope) handleImports(res chan interface{}, errs chan error) error 
 
 		// Index imported separately, has resolution of
 		// references will happen later after indexing.
-		go b.Indexer.indexImported(imp.Path, res, errs)
+		pkg, err := b.Indexer.indexImported(ctx, imp.Path)
+		if err != nil {
+			return err
+		}
 
+		in <- pkg
 	}
 	return nil
 }

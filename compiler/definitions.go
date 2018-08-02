@@ -96,17 +96,18 @@ type Package struct {
 // types according to it's class.
 func (p *Package) Add(declr interface{}) error {
 	switch rdeclr := declr.(type) {
+	case *Package:
+		p.Depends[rdeclr.Name] = rdeclr
 	case *Struct:
-
 	case *Function:
 	case *Map:
 	case *Slice:
 	case Variable:
 		if rdeclr.Blank {
 			p.Blanks = append(p.Blanks, rdeclr)
-			return nil
+		} else {
+			p.Variables = append(p.Variables, rdeclr)
 		}
-		p.Variables = append(p.Variables, rdeclr)
 	case Constant:
 		p.Constants = append(p.Constants, rdeclr)
 	}
