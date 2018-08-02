@@ -1,8 +1,10 @@
 package compiler
 
 import (
+	"fmt"
 	"go/ast"
 	"path/filepath"
+	"strings"
 
 	"strconv"
 
@@ -26,26 +28,44 @@ type Indexer struct {
 
 	waiter  sync.WaitGroup
 	arw     sync.RWMutex
-	Indexed map[string]*Package
+	indexed map[string]*Package
 }
 
 // Index takes provided loader.Program returning a Package containing
 // parsed structures, types and declarations of all packages.
 // It takes the basePkg path as the starting point of indexing, where the
 // Package instance return is the basePkg retrieved from the program.
-func (indexer *Indexer) Index() (*Package, error) {
+// If no error occurred during initial indexing then generated package
+// and indexed map of packages is returned during resolution i.e calling
+// of the Resolve(map[string]*Package) method.
+// if an error occurred during resolution then the indexed package, map
+// of other indexed packages and the error that occurred is returned.
+func (indexer *Indexer) Index() (*Package, map[string]*Package, error) {
 	ctxPkg := indexer.Program.Package(indexer.BasePackage)
 	if ctxPkg == nil {
-		return nil, ErrNotFound
+		return nil, nil, ErrNotFound
 	}
 
+	indexer.indexed = map[string]*Package{}
+
+	// Run initial package and dependencies indexing.
 	pkg, err := indexer.indexPackage(indexer.BasePackage, ctxPkg)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	pkg.Name = indexer.BasePackage
-	return pkg, nil
+	// Get all indexed packages map.
+	indexed := indexer.indexed
+
+	// Call all indexed packages Resolve() method to ensure
+	// all structures are adequately referenced.
+	//for _, pkg := range indexed {
+	//	if err := pkg.Resolve(indexed); err != nil {
+	//		return pkg, indexed, err
+	//	}
+	//}
+
+	return pkg, indexed, nil
 }
 
 // indexPackage takes provided loader.Program returning a Package containing
@@ -53,16 +73,17 @@ func (indexer *Indexer) Index() (*Package, error) {
 func (indexer *Indexer) indexPackage(targetPackage string, p *loader.PackageInfo) (*Package, error) {
 	pkg := &Package{
 		Meta:       p,
-		Depends:    map[string]*Package{},
-		Files:      map[string]*PackageFile{},
+		Name:       targetPackage,
+		Types:      map[string]*Type{},
 		Structs:    map[string]*Struct{},
-		Types:      map[string]*AliasType{},
-		Interfaces: map[string]*Interface{},
+		Depends:    map[string]*Package{},
 		Functions:  map[string]*Function{},
+		Interfaces: map[string]*Interface{},
+		Files:      map[string]*PackageFile{},
 	}
 
 	indexer.arw.Lock()
-	indexer.Indexed[targetPackage] = pkg
+	indexer.indexed[targetPackage] = pkg
 	indexer.arw.Unlock()
 
 	errs := make(chan error, 0)
@@ -137,7 +158,7 @@ listenLoop:
 
 func (indexer *Indexer) indexImported(path string, res chan interface{}, errs chan error) {
 	indexer.arw.RLock()
-	if pkg, ok := indexer.Indexed[path]; ok {
+	if pkg, ok := indexer.indexed[path]; ok {
 		indexer.arw.RUnlock()
 		res <- pkg
 		return
@@ -180,7 +201,6 @@ type ParseScope struct {
 // Parse runs through all non-comment based declarations within the
 // giving file.
 func (b *ParseScope) Parse(res chan interface{}, errs chan error) {
-
 	if err := b.handleImports(res, errs); err != nil {
 		errs <- err
 		return
@@ -188,7 +208,16 @@ func (b *ParseScope) Parse(res chan interface{}, errs chan error) {
 
 	// Parse all structures first, ensuring to add them into package.
 	for _, declr := range b.File.Decls {
-
+		switch elem := declr.(type) {
+		case *ast.FuncDecl:
+			if err := b.handleFunctionSpec(elem, res); err != nil {
+				errs <- err
+				return
+			}
+		case *ast.GenDecl:
+		case *ast.BadDecl:
+			// Do nothing...
+		}
 	}
 
 	// Parse comments not attached to any declared structured.
@@ -217,6 +246,7 @@ func (b *ParseScope) handleImports(res chan interface{}, errs chan error) error 
 		imp.Column = begin.Column
 		imp.ColumnEnd = end.Column
 
+		// If it has an alias then set alias to name value.
 		if dependency.Name != nil {
 			imp.Alias = dependency.Name.Name
 		}
@@ -224,34 +254,101 @@ func (b *ParseScope) handleImports(res chan interface{}, errs chan error) error 
 		// Add import into package file list.
 		b.Package.Imports = append(b.Package.Imports, imp)
 
+		// Index imported separately, has resolution of
+		// references will happen later after indexing.
 		go b.Indexer.indexImported(imp.Path, res, errs)
 
 	}
 	return nil
 }
 
-func (b *ParseScope) handleStructSpec() {
+func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, res chan interface{}) error {
+	var declr Function
+	declr.Name = fn.Name.Name
 
+	if fn.Doc != nil {
+		doc, err := b.handleCommentGroup(fn.Doc)
+		if err != nil {
+			return err
+		}
+
+		declr.Meta.Doc = doc
+	}
+
+	// Set the line details of giving commentary.
+	length, begin, end := compiler.GetPosition(b.Program.Fset, fn.Pos(), fn.End())
+	declr.File = begin.Filename
+	declr.Begin = begin.Offset
+	declr.End = end.Offset
+	declr.Length = length
+	declr.Line = begin.Line
+	declr.LineEnd = end.Line
+	declr.Column = begin.Column
+	declr.ColumnEnd = end.Column
+
+	obj := b.Info.ObjectOf(fn.Name)
+	declr.Exported = obj.Exported()
+	declr.Meta.Name = obj.Pkg().Name()
+	declr.Meta.Path = obj.Pkg().Path()
+	declr.Path = strings.Join([]string{obj.Pkg().Path(), fn.Name.Name}, ".")
+
+	var err error
+	if fn.Type.Params != nil {
+		declr.Arguments, err = b.handleParameterList(fn.Type.Params)
+		if err != nil {
+			return err
+		}
+	}
+
+	if fn.Type.Results != nil {
+		declr.Returns, err = b.handleParameterList(fn.Type.Results)
+		if err != nil {
+			return err
+		}
+	}
+
+	if fn.Recv == nil {
+		res <- &declr
+		return nil
+	}
+
+	res <- &declr
+	return nil
 }
 
-func (b *ParseScope) handleFunctionSpec() {
-
+func (b *ParseScope) handleParameterList(set *ast.FieldList) ([]Parameter, error) {
+	var params []Parameter
+	//for _, param := range set.List {
+	//	for _, name := range param.Names {
+	//		fmt.Printf("Params: %d -> %q\n", set.NumFields(), name)
+	//	}
+	//}
+	return params, nil
 }
 
-func (b *ParseScope) handleChannelSpec() {
+func (b *ParseScope) handleStructSpec(str *ast.StructType, res chan interface{}) error {
 
+	return nil
 }
 
-func (b *ParseScope) handleValueSpec() {
+func (b *ParseScope) handleChannelSpec() error {
 
+	return nil
 }
 
-func (b *ParseScope) handleMapSpec() {
+func (b *ParseScope) handleValueSpec() error {
 
+	return nil
 }
 
-func (b *ParseScope) handleSliceSpec() {
+func (b *ParseScope) handleMapSpec() error {
 
+	return nil
+}
+
+func (b *ParseScope) handleSliceSpec() error {
+
+	return nil
 }
 
 func (b *ParseScope) handleCommentaries() error {
@@ -328,5 +425,156 @@ func getExprName(n interface{}) (string, error) {
 		return getExprName(t.X)
 	default:
 		return "", Error("unable to get name")
+	}
+}
+
+// GetExprCaller gets the expression caller
+// e.g. x.Cool() => x
+func GetExprCaller(n ast.Node) (ast.Expr, error) {
+	switch t := n.(type) {
+	case *ast.SelectorExpr:
+		return t.X, nil
+	case *ast.Ident:
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("util/GetExprCaller: unhandled %T", t)
+	}
+}
+
+// GetIdentifier gets rightmost identifier if there is one
+func GetIdentifier(n ast.Node) (*ast.Ident, error) {
+	switch t := n.(type) {
+	case *ast.Ident:
+		return t, nil
+	case *ast.StarExpr:
+		return GetIdentifier(t.X)
+	case *ast.UnaryExpr:
+		return GetIdentifier(t.X)
+	case *ast.SelectorExpr:
+		return GetIdentifier(t.Sel)
+	case *ast.IndexExpr:
+		return GetIdentifier(t.X)
+	case *ast.CallExpr:
+		return GetIdentifier(t.Fun)
+	case *ast.CompositeLit:
+		return GetIdentifier(t.Type)
+	case *ast.FuncDecl:
+		return t.Name, nil
+	case *ast.ParenExpr:
+		return GetIdentifier(t.X)
+	case *ast.ArrayType, *ast.MapType, *ast.StructType,
+		*ast.ChanType, *ast.FuncType, *ast.InterfaceType,
+		*ast.FuncLit, *ast.BinaryExpr:
+		return nil, nil
+	case *ast.SliceExpr:
+		return GetIdentifier(t.X)
+	default:
+		return nil, fmt.Errorf("GetIdentifier: unhandled %T", n)
+	}
+}
+
+// ExprToString fn
+func ExprToString(n ast.Node) (string, error) {
+	switch t := n.(type) {
+	case *ast.BasicLit:
+		return t.Value, nil
+	case *ast.Ident:
+		return t.Name, nil
+	case *ast.StarExpr:
+		return ExprToString(t.X)
+	case *ast.UnaryExpr:
+		return ExprToString(t.X)
+	case *ast.SelectorExpr:
+		s, e := ExprToString(t.X)
+		if e != nil {
+			return "", e
+		}
+		return s + "." + t.Sel.Name, nil
+	case *ast.IndexExpr:
+		s, e := ExprToString(t.X)
+		if e != nil {
+			return "", e
+		}
+		i, e := ExprToString(t.Index)
+		if e != nil {
+			return "", e
+		}
+		return s + "[" + i + "]", nil
+	case *ast.CallExpr:
+		c, e := ExprToString(t.Fun)
+		if e != nil {
+			return "", e
+		}
+		var args []string
+		for _, arg := range t.Args {
+			a, e := ExprToString(arg)
+			if e != nil {
+				return "", e
+			}
+			args = append(args, a)
+		}
+		return c + "(" + strings.Join(args, ", ") + ")", nil
+	case *ast.CompositeLit:
+		c, e := ExprToString(t.Type)
+		if e != nil {
+			return "", e
+		}
+		var args []string
+		for _, arg := range t.Elts {
+			a, e := ExprToString(arg)
+			if e != nil {
+				return "", e
+			}
+			args = append(args, a)
+		}
+		return c + "{" + strings.Join(args, ", ") + "}", nil
+	case *ast.ArrayType:
+		c, e := ExprToString(t.Elt)
+		if e != nil {
+			return "", e
+		}
+		return `[]` + c, nil
+	case *ast.FuncLit:
+		return "func(){}()", nil
+	case *ast.ParenExpr:
+		x, e := ExprToString(t.X)
+		if e != nil {
+			return "", e
+		}
+		return "(" + x + ")", nil
+	case *ast.KeyValueExpr:
+		k, e := ExprToString(t.Key)
+		if e != nil {
+			return "", e
+		}
+		v, e := ExprToString(t.Value)
+		if e != nil {
+			return "", e
+		}
+		return "{" + k + ":" + v + "}", nil
+	case *ast.MapType:
+		k, e := ExprToString(t.Key)
+		if e != nil {
+			return "", e
+		}
+		v, e := ExprToString(t.Value)
+		if e != nil {
+			return "", e
+		}
+		return "{" + k + ":" + v + "}", nil
+	case *ast.BinaryExpr:
+		x, e := ExprToString(t.X)
+		if e != nil {
+			return "", e
+		}
+		y, e := ExprToString(t.Y)
+		if e != nil {
+			return "", e
+		}
+		return x + " " + t.Op.String() + " " + y, nil
+	case *ast.InterfaceType:
+		return "interface{}", nil
+	default:
+		return "", fmt.Errorf("util/ExprToString: unhandled %T", n)
 	}
 }

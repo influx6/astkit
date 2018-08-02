@@ -2,6 +2,11 @@ package compiler
 
 import "golang.org/x/tools/go/loader"
 
+// ResolverFn defines a function type representing
+// a function taking in a map of packages, returning
+// an error.
+type ResolverFn func(map[string]*Package) error
+
 // Location embodies important data relating to
 // the location, column and length of declared
 // statement or expression within a source file.
@@ -36,6 +41,15 @@ type Doc struct {
 	Parts []DocText
 }
 
+// Meta defines the basic package related information
+// attached to a giving structure declaration or variable
+// pointing to it's origin of declaration.
+type Meta struct {
+	Doc  Doc
+	Name string
+	Path string
+}
+
 // Import embodies an import declaration within a package
 // file. It contains the path, the filesystem directory
 // location and alias used.
@@ -67,9 +81,9 @@ type Package struct {
 
 	Name       string
 	Docs       []Doc
-	Blanks     []*Variable
-	Constants  []*Constant
-	Variables  []*Variable
+	Blanks     []Variable
+	Constants  []Constant
+	Variables  []Variable
 	Types      map[string]*Type
 	Structs    map[string]*Struct
 	Interfaces map[string]*Interface
@@ -87,9 +101,13 @@ func (p *Package) Add(declr interface{}) error {
 	case *Function:
 	case *Map:
 	case *Slice:
-	case *Variable:
+	case Variable:
+		if rdeclr.Blank {
+			p.Blanks = append(p.Blanks, rdeclr)
+			return nil
+		}
 		p.Variables = append(p.Variables, rdeclr)
-	case *Constant:
+	case Constant:
 		p.Constants = append(p.Constants, rdeclr)
 	}
 	return nil
@@ -100,7 +118,41 @@ func (p *Package) Add(declr interface{}) error {
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Package) Resolve(indexed map[string]*Package) error {
-
+	for _, blank := range p.Blanks {
+		if err := blank.Resolve(indexed); err != nil {
+			return err
+		}
+	}
+	for _, consts := range p.Constants {
+		if err := consts.Resolve(indexed); err != nil {
+			return err
+		}
+	}
+	for _, vars := range p.Variables {
+		if err := vars.Resolve(indexed); err != nil {
+			return err
+		}
+	}
+	for _, tp := range p.Types {
+		if err := tp.Resolve(indexed); err != nil {
+			return err
+		}
+	}
+	for _, str := range p.Structs {
+		if err := str.Resolve(indexed); err != nil {
+			return err
+		}
+	}
+	for _, itr := range p.Interfaces {
+		if err := itr.Resolve(indexed); err != nil {
+			return err
+		}
+	}
+	for _, fn := range p.Functions {
+		if err := fn.Resolve(indexed); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -109,8 +161,28 @@ func (p *Package) Resolve(indexed map[string]*Package) error {
 type Interface struct {
 	Location
 
-	Name    string
+	// Path represents the giving full qualified package path name
+	// and type name of type in format: PackagePath.TypeName.
+	Path string
+
+	// Name represents the name of giving interface.
+	Name string
+
+	// Exported is used to indicate if type is exported or not.
+	Exported bool
+
+	// Methods contains all method definitions/rules provided
+	// as contract for interface implementors.
 	Methods []Function
+
+	// Meta provides associated package and commentary information related to
+	// giving type.
+	Meta Meta
+
+	// resolver provides a means of the indexer to provide a custom resolving
+	// function which will run internal logic to set giving values
+	// appropriately during resolution of types.
+	resolver ResolverFn
 }
 
 // Resolve provides the list of indexed packages to internal structures
@@ -118,7 +190,11 @@ type Interface struct {
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Interface) Resolve(indexed map[string]*Package) error {
-
+	if p.resolver != nil {
+		if err := p.resolver(indexed); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -127,8 +203,28 @@ func (p *Interface) Resolve(indexed map[string]*Package) error {
 type Struct struct {
 	Location
 
-	Name    string
+	// Path represents the giving full qualified package path name
+	// and type name of type in format: PackagePath.TypeName.
+	Path string
+
+	// Name represents the name of giving interface.
+	Name string
+
+	// Exported is used to indicate if type is exported or not.
+	Exported bool
+
+	// Methods contains all method definitions/rules provided
+	// as contract for interface implementors.
 	Methods []Function
+
+	// Meta provides associated package  and commentary information related to
+	// giving type.
+	Meta Meta
+
+	// resolver provides a means of the indexer to provide a custom resolving
+	// function which will run internal logic to set giving values
+	// appropriately during resolution of types.
+	resolver ResolverFn
 }
 
 // Resolve provides the list of indexed packages to internal structures
@@ -136,7 +232,11 @@ type Struct struct {
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Struct) Resolve(indexed map[string]*Package) error {
-
+	if p.resolver != nil {
+		if err := p.resolver(indexed); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -146,11 +246,46 @@ func (p *Struct) Resolve(indexed map[string]*Package) error {
 type Function struct {
 	Location
 
-	IsAsync   bool
-	Name      string
-	Struct    *Struct
+	// Path represents the giving full qualified package path name
+	// and type name of type in format: PackagePath.TypeName.
+	Path string
+
+	// Name represents the name of giving interface.
+	Name string
+
+	// Exported is used to indicate if type is exported or not.
+	Exported bool
+
+	// IsAsync indicates whether function is called
+	// asynchronously in goroutine.
+	IsAsync bool
+
+	// Struct sets the struct which function is attached
+	// to has a method.
+	Struct *Struct
+
+	// Interface sets the interface which function definition
+	// exists as part of.
 	Interface *Interface
-	Body      []Expression
+
+	// Arguments provides the argument list for giving function.
+	Arguments []Parameter
+
+	// Arguments provides the argument list for giving function.
+	Returns []Parameter
+
+	// Body contains contents of Function if not a Type declaration
+	// or interface contract.
+	Body []Expression
+
+	// Meta provides associated package  and commentary information related to
+	// giving type.
+	Meta Meta
+
+	// resolver provides a means of the indexer to provide a custom resolving
+	// function which will run internal logic to set giving values
+	// appropriately during resolution of types.
+	resolver ResolverFn
 }
 
 // Resolve provides the list of indexed packages to internal structures
@@ -158,7 +293,11 @@ type Function struct {
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Function) Resolve(indexed map[string]*Package) error {
-
+	if p.resolver != nil {
+		if err := p.resolver(indexed); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -167,7 +306,17 @@ func (p *Function) Resolve(indexed map[string]*Package) error {
 type Field struct {
 	Location
 
-	Name      string
+	// Path represents the giving full qualified package path name
+	// and type name of type in format: PackagePath.TypeName.
+	Path string
+
+	// Name represents the name of giving interface.
+	Name string
+
+	// Meta provides associated package  and commentary information related to
+	// giving type.
+	Meta Meta
+
 	Basic     *Base
 	Struct    *Struct
 	Func      *Function
@@ -176,6 +325,11 @@ type Field struct {
 	Chan      *Channel
 	Map       *Map
 	Slice     *Slice
+
+	// resolver provides a means of the indexer to provide a custom resolving
+	// function which will run internal logic to set giving values
+	// appropriately during resolution of types.
+	resolver ResolverFn
 }
 
 // Resolve provides the list of indexed packages to internal structures
@@ -183,7 +337,55 @@ type Field struct {
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Field) Resolve(indexed map[string]*Package) error {
+	if p.resolver != nil {
+		if err := p.resolver(indexed); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
+// Parameter represents argument and return types
+// provided to a function, method or function type
+// declaration.
+type Parameter struct {
+	Location
+
+	// Name represents the name of giving interface.
+	Name string
+
+	// IsVariadic indicates if giving parameter is variadic.
+	IsVariadic bool
+
+	// Meta provides associated package  and commentary information related to
+	// giving type.
+	Meta Meta
+
+	Basic     *Base
+	Struct    *Struct
+	Func      *Function
+	Type      *Type
+	Interface *Interface
+	Chan      *Channel
+	Map       *Map
+	Slice     *Slice
+
+	// resolver provides a means of the indexer to provide a custom resolving
+	// function which will run internal logic to set giving values
+	// appropriately during resolution of types.
+	resolver ResolverFn
+}
+
+// Resolve provides the list of indexed packages to internal structures
+// to resolve imported or internal types that they reference. This is
+// used to ensure all package structures have direct link to parsed
+// type.
+func (p *Parameter) Resolve(indexed map[string]*Package) error {
+	if p.resolver != nil {
+		if err := p.resolver(indexed); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -192,9 +394,30 @@ func (p *Field) Resolve(indexed map[string]*Package) error {
 type Map struct {
 	Location
 
-	Name      string
-	KeyType   interface{}
+	// Path represents the giving full qualified package path name
+	// and type name of type in format: PackagePath.TypeName.
+	Path string
+
+	// Name represents the name of giving interface.
+	Name string
+
+	// Exported is used to indicate if type is exported or not.
+	Exported bool
+
+	// KeyType sets the key type for giving map type.
+	KeyType interface{}
+
+	// ValueType sets the value type for giving map type.
 	ValueType interface{}
+
+	// Meta provides associated package  and commentary information related to
+	// giving type.
+	Meta Meta
+
+	// resolver provides a means of the indexer to provide a custom resolving
+	// function which will run internal logic to set giving values
+	// appropriately during resolution of types.
+	resolver ResolverFn
 }
 
 // Resolve provides the list of indexed packages to internal structures
@@ -202,7 +425,11 @@ type Map struct {
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Map) Resolve(indexed map[string]*Package) error {
-
+	if p.resolver != nil {
+		if err := p.resolver(indexed); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -211,8 +438,27 @@ func (p *Map) Resolve(indexed map[string]*Package) error {
 type Slice struct {
 	Location
 
+	// Path represents the giving full qualified package path name
+	// and type name of type in format: PackagePath.TypeName.
+	Path string
+
+	// Name represents the name of giving interface.
 	Name string
+
+	// Exported is used to indicate if type is exported or not.
+	Exported bool
+
+	// Type defines the type associated with giving slice.
 	Type interface{}
+
+	// Meta provides associated package  and commentary information related to
+	// giving type.
+	Meta Meta
+
+	// resolver provides a means of the indexer to provide a custom resolving
+	// function which will run internal logic to set giving values
+	// appropriately during resolution of types.
+	resolver ResolverFn
 }
 
 // Resolve provides the list of indexed packages to internal structures
@@ -220,7 +466,11 @@ type Slice struct {
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Slice) Resolve(indexed map[string]*Package) error {
-
+	if p.resolver != nil {
+		if err := p.resolver(indexed); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -229,7 +479,20 @@ func (p *Slice) Resolve(indexed map[string]*Package) error {
 type Channel struct {
 	Location
 
-	Name      string
+	// Path represents the giving full qualified package path name
+	// and type name of type in format: PackagePath.TypeName.
+	Path string
+
+	// Name represents the name of giving interface.
+	Name string
+
+	// Exported is used to indicate if type is exported or not.
+	Exported bool
+
+	// Meta provides associated package  and commentary information related to
+	// giving type.
+	Meta Meta
+
 	Basic     *Base
 	Chan      *Channel
 	Struct    *Struct
@@ -238,6 +501,11 @@ type Channel struct {
 	Func      *Function
 	Map       *Map
 	Slice     *Slice
+
+	// resolver provides a means of the indexer to provide a custom resolving
+	// function which will run internal logic to set giving values
+	// appropriately during resolution of types.
+	resolver ResolverFn
 }
 
 // Resolve provides the list of indexed packages to internal structures
@@ -245,7 +513,11 @@ type Channel struct {
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Channel) Resolve(indexed map[string]*Package) error {
-
+	if p.resolver != nil {
+		if err := p.resolver(indexed); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -254,16 +526,40 @@ func (p *Channel) Resolve(indexed map[string]*Package) error {
 type Variable struct {
 	Location
 
+	Basic     *Base
+	Chan      *Channel
+	Struct    *Struct
+	Type      *Type
+	Interface *Interface
+	Func      *Function
+	Map       *Map
+	Slice     *Slice
+
+	// Path represents the giving full qualified package path name
+	// and type name of type in format: PackagePath.TypeName.
+	Path string
+
+	// Name represents the name of giving interface.
+	Name string
+
+	// Exported is used to indicate if type is exported or not.
+	Exported bool
+
+	// Blank is used to indicate if variable name is blank.
+	Blank bool
+
+	// IsShortHand is used to indicate if variable is declared
+	// in golang short hand or normal format.
 	IsShortHand bool
-	Name        string
-	Basic       *Base
-	Chan        *Channel
-	Struct      *Struct
-	Type        *Type
-	Interface   *Interface
-	Func        *Function
-	Map         *Map
-	Slice       *Slice
+
+	// Meta provides associated package  and commentary information related to
+	// giving type.
+	Meta Meta
+
+	// resolver provides a means of the indexer to provide a custom resolving
+	// function which will run internal logic to set giving values
+	// appropriately during resolution of types.
+	resolver ResolverFn
 }
 
 // Resolve provides the list of indexed packages to internal structures
@@ -271,7 +567,11 @@ type Variable struct {
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Variable) Resolve(indexed map[string]*Package) error {
-
+	if p.resolver != nil {
+		if err := p.resolver(indexed); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -280,8 +580,26 @@ func (p *Variable) Resolve(indexed map[string]*Package) error {
 type Constant struct {
 	Location
 
-	Name  string
+	// Path represents the giving full qualified package path name
+	// and type name of type in format: PackagePath.TypeName.
+	Path string
+
+	// Name represents the name of giving interface.
+	Name string
+
+	// Exported is used to indicate if type is exported or not.
+	Exported bool
+
 	Basic *Base
+
+	// Meta provides associated package  and commentary information related to
+	// giving type.
+	Meta Meta
+
+	// resolver provides a means of the indexer to provide a custom resolving
+	// function which will run internal logic to set giving values
+	// appropriately during resolution of types.
+	resolver ResolverFn
 }
 
 // Resolve provides the list of indexed packages to internal structures
@@ -289,16 +607,39 @@ type Constant struct {
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Constant) Resolve(indexed map[string]*Package) error {
-
+	if p.resolver != nil {
+		if err := p.resolver(indexed); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 // Base represents a golang base types which include
-// strings, ints, floats, complex, which are atomic
-// indivisible types.
+// strings, int types, floats, complex, etc, which are
+// atomic indivisible types.
 type Base struct {
+	// Path represents the giving full qualified package path name
+	// and type name of type in format: PackagePath.TypeName.
+	Path string
+
+	// Name represents the name of giving interface.
 	Name string
+
+	// Exported is used to indicate if type is exported or not.
+	Exported bool
+
+	// Type sets the defined type name for giving base type.
 	Type string
+
+	// Meta provides associated package  and commentary information related to
+	// giving type.
+	Meta Meta
+
+	// resolver provides a means of the indexer to provide a custom resolving
+	// function which will run internal logic to set giving values
+	// appropriately during resolution of types.
+	resolver ResolverFn
 }
 
 // Resolve provides the list of indexed packages to internal structures
@@ -306,7 +647,11 @@ type Base struct {
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Base) Resolve(indexed map[string]*Package) error {
-
+	if p.resolver != nil {
+		if err := p.resolver(indexed); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -315,16 +660,36 @@ func (p *Base) Resolve(indexed map[string]*Package) error {
 type Type struct {
 	Location
 
-	Name       string
+	// Path represents the giving full qualified package path name
+	// and type name of type in format: PackagePath.TypeName.
+	Path string
+
+	// Name represents the name of giving interface.
+	Name string
+
+	// Exported is used to indicate if type is exported or not.
+	Exported bool
+
+	// IsFunction sets if giving type declaration is a function type declaration.
 	IsFunction bool
-	Chan       *Channel
-	Struct     *Struct
-	Basic      *Base
-	Type       *Type
-	Interface  *Interface
-	Func       *Function
-	Map        *Map
-	Slice      *Slice
+
+	// Meta provides associated package  and commentary information related to
+	// giving type.
+	Meta Meta
+
+	Chan      *Channel
+	Struct    *Struct
+	Basic     *Base
+	Type      *Type
+	Interface *Interface
+	Func      *Function
+	Map       *Map
+	Slice     *Slice
+
+	// resolver provides a means of the indexer to provide a custom resolving
+	// function which will run internal logic to set giving values
+	// appropriately during resolution of types.
+	resolver ResolverFn
 }
 
 // Resolve provides the list of indexed packages to internal structures
@@ -332,7 +697,11 @@ type Type struct {
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Type) Resolve(indexed map[string]*Package) error {
-
+	if p.resolver != nil {
+		if err := p.resolver(indexed); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -350,6 +719,15 @@ type Expression struct {
 	Value    string
 	Type     ExpressionType
 	Children []Expression
+
+	// Meta provides associated package  and commentary information related to
+	// giving type.
+	Meta Meta
+
+	// resolver provides a means of the indexer to provide a custom resolving
+	// function which will run internal logic to set giving values
+	// appropriately during resolution of types.
+	resolver ResolverFn
 }
 
 // Resolve provides the list of indexed packages to internal structures
@@ -357,6 +735,10 @@ type Expression struct {
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Expression) Resolve(indexed map[string]*Package) error {
-
+	if p.resolver != nil {
+		if err := p.resolver(indexed); err != nil {
+			return err
+		}
+	}
 	return nil
 }

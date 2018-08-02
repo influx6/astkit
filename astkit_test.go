@@ -9,9 +9,10 @@ import (
 )
 
 func TestTransform(t *testing.T) {
-	pkg, err := astkit.Transform("gitlab.com/gokit/astkit/testbed/sudo")
+	pkg, others, err := astkit.Transform("gitlab.com/gokit/astkit/testbed/sudo")
 	assert.NoError(t, err)
 	assert.NotNil(t, pkg)
+	assert.NotNil(t, others)
 
 	fmt.Printf("Packge: %#v", pkg)
 }
