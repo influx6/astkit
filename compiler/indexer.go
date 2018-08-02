@@ -59,11 +59,11 @@ func (indexer *Indexer) Index() (*Package, map[string]*Package, error) {
 
 	// Call all indexed packages Resolve() method to ensure
 	// all structures are adequately referenced.
-	//for _, pkg := range indexed {
-	//	if err := pkg.Resolve(indexed); err != nil {
-	//		return pkg, indexed, err
-	//	}
-	//}
+	for _, pkg := range indexed {
+		if err := pkg.Resolve(indexed); err != nil {
+			return pkg, indexed, err
+		}
+	}
 
 	return pkg, indexed, nil
 }
@@ -92,7 +92,6 @@ func (indexer *Indexer) indexPackage(targetPackage string, p *loader.PackageInfo
 	// Run through all files for package and schedule them to appropriately
 	// send
 	for _, file := range p.Files {
-
 		pkgFile := new(PackageFile)
 		_, begin, end := compiler.GetPosition(indexer.Program.Fset, file.Pos(), file.End())
 		if begin.IsValid() {
@@ -210,10 +209,11 @@ func (b *ParseScope) Parse(res chan interface{}, errs chan error) {
 	for _, declr := range b.File.Decls {
 		switch elem := declr.(type) {
 		case *ast.FuncDecl:
-			if err := b.handleFunctionSpec(elem, res); err != nil {
-				errs <- err
-				return
-			}
+			_ = elem
+			//if err := b.handleFunctionSpec(elem, res); err != nil {
+			//	errs <- err
+			//	return
+			//}
 		case *ast.GenDecl:
 		case *ast.BadDecl:
 			// Do nothing...
