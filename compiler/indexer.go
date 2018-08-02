@@ -75,6 +75,8 @@ func (indexer *Indexer) Index(ctx context.Context) (*Package, map[string]*Packag
 		}
 	}
 
+	indexer.waiter.Wait()
+
 	return pkg, indexed, nil
 }
 
@@ -153,6 +155,7 @@ func (indexer *Indexer) index(ctx context.Context, pkg *Package, p *loader.Packa
 
 	err := w.Wait()
 	close(in)
+
 	return err
 }
 
@@ -201,7 +204,9 @@ func (b *ParseScope) Parse(ctx context.Context, in chan interface{}) error {
 	for _, declr := range b.File.Decls {
 		switch elem := declr.(type) {
 		case *ast.FuncDecl:
-			return b.handleFunctionSpec(elem, in)
+			if err := b.handleFunctionSpec(elem, in); err != nil {
+				return err
+			}
 		case *ast.GenDecl:
 		case *ast.BadDecl:
 			// Do nothing...
@@ -217,6 +222,10 @@ func (b *ParseScope) Parse(ctx context.Context, in chan interface{}) error {
 }
 
 func (b *ParseScope) handleImports(ctx context.Context, in chan interface{}) error {
+	if b.Package.Imports == nil {
+		b.Package.Imports = map[string]Import{}
+	}
+
 	for _, dependency := range b.File.Imports {
 		length, begin, end := compiler.GetPosition(b.Program.Fset, dependency.Pos(), dependency.End())
 
@@ -226,6 +235,26 @@ func (b *ParseScope) handleImports(ctx context.Context, in chan interface{}) err
 		}
 
 		var imp Import
+
+		if dependency.Doc != nil {
+			b.GenComments[dependency.Doc] = struct{}{}
+
+			doc, err := b.handleCommentGroup(dependency.Doc)
+			if err != nil {
+				return err
+			}
+			imp.Docs = append(imp.Docs, doc)
+		}
+
+		if dependency.Comment != nil {
+			b.GenComments[dependency.Comment] = struct{}{}
+			doc, err := b.handleCommentGroup(dependency.Comment)
+			if err != nil {
+				return err
+			}
+			imp.Docs = append(imp.Docs, doc)
+		}
+
 		imp.Path = value
 		imp.File = begin.Filename
 		imp.Begin = begin.Offset
@@ -239,10 +268,16 @@ func (b *ParseScope) handleImports(ctx context.Context, in chan interface{}) err
 		// If it has an alias then set alias to name value.
 		if dependency.Name != nil {
 			imp.Alias = dependency.Name.Name
+		} else {
+			baseName := filepath.Base(imp.Path)
+			if strings.Contains(baseName, ".") {
+				baseName = strings.Split(baseName, ".")[0]
+			}
+			imp.Alias = baseName
 		}
 
 		// Add import into package file list.
-		b.Package.Imports = append(b.Package.Imports, imp)
+		b.Package.Imports[imp.Alias] = imp
 
 		// Index imported separately, has resolution of
 		// references will happen later after indexing.
@@ -261,6 +296,7 @@ func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, res chan interface{}) 
 	declr.Name = fn.Name.Name
 
 	if fn.Doc != nil {
+		b.GenComments[fn.Doc] = struct{}{}
 		doc, err := b.handleCommentGroup(fn.Doc)
 		if err != nil {
 			return err
@@ -312,11 +348,67 @@ func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, res chan interface{}) 
 
 func (b *ParseScope) handleParameterList(set *ast.FieldList) ([]Parameter, error) {
 	var params []Parameter
-	//for _, param := range set.List {
-	//	for _, name := range param.Names {
-	//		fmt.Printf("Params: %d -> %q\n", set.NumFields(), name)
-	//	}
-	//}
+	for _, param := range set.List {
+		for _, name := range param.Names {
+			params = append(params, func(t ast.Expr, nm *ast.Ident, f *ast.Field) Parameter {
+				var p Parameter
+				p.Name = nm.Name
+
+				if f.Doc != nil {
+					b.GenComments[f.Doc] = struct{}{}
+					if doc, err := b.handleCommentGroup(f.Doc); err != nil {
+						p.Docs = append(p.Docs, doc)
+					}
+				}
+
+				if f.Comment != nil {
+					b.GenComments[f.Comment] = struct{}{}
+					if doc, err := b.handleCommentGroup(f.Comment); err != nil {
+						p.Docs = append(p.Docs, doc)
+					}
+				}
+
+				// Set the line details of giving commentary.
+				length, begin, end := compiler.GetPosition(b.Program.Fset, name.Pos(), name.End())
+				p.File = begin.Filename
+				p.Begin = begin.Offset
+				p.End = end.Offset
+				p.Length = length
+				p.Line = begin.Line
+				p.LineEnd = end.Line
+				p.Column = begin.Column
+				p.ColumnEnd = end.Column
+
+				if elip, ok := t.(*ast.Ellipsis); ok {
+					p.IsVariadic = true
+					p.resolver = func(packages map[string]*Package) error {
+						tl, tlname, err := GetExprType(b, elip.Elt, packages)
+						if err != nil {
+							return err
+						}
+
+						p.Type = tl
+						p.TypeName = tlname
+						return nil
+					}
+					return p
+				}
+
+				p.resolver = func(packages map[string]*Package) error {
+					tl, tlname, err := GetExprType(b, t, packages)
+					if err != nil {
+						return err
+					}
+
+					p.Type = tl
+					p.TypeName = tlname
+					return nil
+				}
+
+				return p
+			}(param.Type, name, param))
+		}
+	}
 	return params, nil
 }
 
@@ -408,6 +500,10 @@ func (b *ParseScope) handleDocText(c *ast.Comment) DocText {
 //******************************************************************************
 //  Utilities
 //******************************************************************************
+
+func GetExprType(base *ParseScope, expr ast.Expr, others map[string]*Package) (interface{}, string, error) {
+	return nil, "", nil
+}
 
 func getExprName(n interface{}) (string, error) {
 	switch t := n.(type) {

@@ -60,6 +60,7 @@ type Import struct {
 	Alias   string
 	Path    string
 	Dir     string
+	Docs    []Doc
 }
 
 // PackageFile defines a giving package file with it's associated
@@ -70,7 +71,7 @@ type PackageFile struct {
 	File    string
 	Dir     string
 	Docs    []Doc
-	Imports []Import
+	Imports map[string]Import
 }
 
 // Package embodies a parsed Golang/Go based package,
@@ -261,13 +262,13 @@ type Function struct {
 	// asynchronously in goroutine.
 	IsAsync bool
 
-	// Struct sets the struct which function is attached
+	// Owner sets the struct or interface which this function is attached
 	// to has a method.
-	Struct *Struct
+	Owner interface{}
 
-	// Interface sets the interface which function definition
-	// exists as part of.
-	Interface *Interface
+	// OwnerName sets the name of the owner if struct or interface which
+	// function is attached to else an empty string.
+	OwnerName string
 
 	// Arguments provides the argument list for giving function.
 	Arguments []Parameter
@@ -318,14 +319,11 @@ type Field struct {
 	// giving type.
 	Meta Meta
 
-	Basic     *Base
-	Struct    *Struct
-	Func      *Function
-	Type      *Type
-	Interface *Interface
-	Chan      *Channel
-	Map       *Map
-	Slice     *Slice
+	// Type sets the value object/declared type.
+	Type interface{}
+
+	// TypeName represents the type name of object type.
+	TypeName string
 
 	// resolver provides a means of the indexer to provide a custom resolving
 	// function which will run internal logic to set giving values
@@ -352,8 +350,16 @@ func (p *Field) Resolve(indexed map[string]*Package) error {
 type Parameter struct {
 	Location
 
+	Docs []Doc
+
 	// Name represents the name of giving interface.
 	Name string
+
+	// Type sets the value object/declared type.
+	Type interface{}
+
+	// TypeName represents the type name of object type.
+	TypeName string
 
 	// IsVariadic indicates if giving parameter is variadic.
 	IsVariadic bool
@@ -361,15 +367,6 @@ type Parameter struct {
 	// Meta provides associated package  and commentary information related to
 	// giving type.
 	Meta Meta
-
-	Basic     *Base
-	Struct    *Struct
-	Func      *Function
-	Type      *Type
-	Interface *Interface
-	Chan      *Channel
-	Map       *Map
-	Slice     *Slice
 
 	// resolver provides a means of the indexer to provide a custom resolving
 	// function which will run internal logic to set giving values
@@ -449,8 +446,11 @@ type Slice struct {
 	// Exported is used to indicate if type is exported or not.
 	Exported bool
 
-	// Type defines the type associated with giving slice.
+	// Type sets the value object/declared type.
 	Type interface{}
+
+	// TypeName represents the type name of object type.
+	TypeName string
 
 	// Meta provides associated package  and commentary information related to
 	// giving type.
@@ -494,14 +494,11 @@ type Channel struct {
 	// giving type.
 	Meta Meta
 
-	Basic     *Base
-	Chan      *Channel
-	Struct    *Struct
-	Type      *Type
-	Interface *Interface
-	Func      *Function
-	Map       *Map
-	Slice     *Slice
+	// Type sets the value object/declared type.
+	Type interface{}
+
+	// TypeName represents the type name of object type.
+	TypeName string
 
 	// resolver provides a means of the indexer to provide a custom resolving
 	// function which will run internal logic to set giving values
@@ -527,14 +524,11 @@ func (p *Channel) Resolve(indexed map[string]*Package) error {
 type Variable struct {
 	Location
 
-	Basic     *Base
-	Chan      *Channel
-	Struct    *Struct
-	Type      *Type
-	Interface *Interface
-	Func      *Function
-	Map       *Map
-	Slice     *Slice
+	// Type sets the value object/declared type.
+	Type interface{}
+
+	// TypeName represents the type name of object type.
+	TypeName string
 
 	// Path represents the giving full qualified package path name
 	// and type name of type in format: PackagePath.TypeName.
@@ -630,8 +624,11 @@ type Base struct {
 	// Exported is used to indicate if type is exported or not.
 	Exported bool
 
-	// Type sets the defined type name for giving base type.
-	Type string
+	// Type sets the value object/declared type.
+	Type interface{}
+
+	// TypeName represents the type name of object type.
+	TypeName string
 
 	// Meta provides associated package  and commentary information related to
 	// giving type.
@@ -678,14 +675,11 @@ type Type struct {
 	// giving type.
 	Meta Meta
 
-	Chan      *Channel
-	Struct    *Struct
-	Basic     *Base
-	Type      *Type
-	Interface *Interface
-	Func      *Function
-	Map       *Map
-	Slice     *Slice
+	// Type sets the value object/declared type.
+	Type interface{}
+
+	// TypeName represents the type name of object type.
+	TypeName string
 
 	// resolver provides a means of the indexer to provide a custom resolving
 	// function which will run internal logic to set giving values
