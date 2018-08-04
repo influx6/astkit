@@ -38,6 +38,43 @@ var typeAndDefaultValue = map[string]interface{}{
 	"chan":       nil,
 }
 
+// IsDefaultType returns true/false if giving string is
+// a default builtin go data type.
+func IsDefaultType(t string) bool {
+	_, ok := defaultTypes[t]
+	return ok
+}
+
+var defaultTypes = map[string]struct{}{
+	"bool":       struct{}{},
+	"byte":       struct{}{},
+	"complex64":  struct{}{},
+	"complex128": struct{}{},
+	"error":      struct{}{},
+	"float32":    struct{}{},
+	"float64":    struct{}{},
+	"int":        struct{}{},
+	"int8":       struct{}{},
+	"int16":      struct{}{},
+	"int32":      struct{}{},
+	"int64":      struct{}{},
+	"rune":       struct{}{},
+	"string":     struct{}{},
+	"uint":       struct{}{},
+	"uint8":      struct{}{},
+	"uint16":     struct{}{},
+	"uint32":     struct{}{},
+	"uint64":     struct{}{},
+	"uintptr":    struct{}{},
+	"complex":    struct{}{},
+	"real":       struct{}{},
+	"func":       struct{}{},
+	"interface":  struct{}{},
+	"map":        struct{}{},
+	"struct":     struct{}{},
+	"chan":       struct{}{},
+}
+
 // IsBuiltIn returns true/false if giving t string is
 // a special name or builtin name within Golang.
 func IsBuiltIn(t string) bool {

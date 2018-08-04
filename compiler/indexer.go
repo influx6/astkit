@@ -1,8 +1,11 @@
 package compiler
 
 import (
+	"errors"
 	"fmt"
 	"go/ast"
+	"go/types"
+	"regexp"
 	"strings"
 
 	"strconv"
@@ -227,7 +230,7 @@ func (b *ParseScope) handleImports(ctx context.Context, in chan interface{}) err
 	}
 
 	for _, dependency := range b.File.Imports {
-		length, begin, end := compiler.GetPosition(b.Program.Fset, dependency.Pos(), dependency.End())
+		source, length, begin, end := compiler.ReadSourceIfPossible(b.Program.Fset, dependency.Pos(), dependency.End())
 
 		value := dependency.Path.Value
 		if unquoted, err := strconv.Unquote(value); err == nil {
@@ -258,6 +261,7 @@ func (b *ParseScope) handleImports(ctx context.Context, in chan interface{}) err
 		imp.Path = value
 		imp.File = begin.Filename
 		imp.Begin = begin.Offset
+		imp.Source = string(source)
 		imp.End = end.Offset
 		imp.Length = length
 		imp.Line = begin.Line
@@ -306,8 +310,9 @@ func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, res chan interface{}) 
 	}
 
 	// Set the line details of giving commentary.
-	length, begin, end := compiler.GetPosition(b.Program.Fset, fn.Pos(), fn.End())
+	srcd, length, begin, end := compiler.ReadSourceIfPossible(b.Program.Fset, fn.Pos(), fn.End())
 	declr.File = begin.Filename
+	declr.Source = string(srcd)
 	declr.Begin = begin.Offset
 	declr.End = end.Offset
 	declr.Length = length
@@ -346,67 +351,271 @@ func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, res chan interface{}) 
 	return nil
 }
 
+func (b *ParseScope) handleFieldWithName(f *ast.Field, nm *ast.Ident, t ast.Expr) (Field, error) {
+	var p Field
+	p.Name = nm.Name
+
+	if f.Doc != nil {
+		b.GenComments[f.Doc] = struct{}{}
+		if doc, err := b.handleCommentGroup(f.Doc); err != nil {
+			p.Docs = append(p.Docs, doc)
+		}
+	}
+
+	if f.Comment != nil {
+		b.GenComments[f.Comment] = struct{}{}
+		if doc, err := b.handleCommentGroup(f.Comment); err != nil {
+			p.Docs = append(p.Docs, doc)
+		}
+	}
+
+	// Set the line details of giving commentary.
+	srcd, length, begin, end := compiler.ReadSourceIfPossible(b.Program.Fset, f.Pos(), f.End())
+	p.File = begin.Filename
+	p.Source = string(srcd)
+	p.Begin = begin.Offset
+	p.End = end.Offset
+	p.Length = length
+	p.Line = begin.Line
+	p.LineEnd = end.Line
+	p.Column = begin.Column
+	p.ColumnEnd = end.Column
+
+	pAddr := &p
+
+	p.resolver = func(packages map[string]*Package) error {
+		tl, tlname, meta, err := GetExprType(b, f, t, packages)
+		if err != nil {
+			return err
+		}
+
+		pAddr.Type = tl
+		pAddr.Meta = meta
+		pAddr.TypeName = tlname
+		return nil
+	}
+
+	return p, nil
+}
+
+func (b *ParseScope) handleField(f *ast.Field, t ast.Expr) (Field, error) {
+	var p Field
+
+	if f.Doc != nil {
+		b.GenComments[f.Doc] = struct{}{}
+		if doc, err := b.handleCommentGroup(f.Doc); err != nil {
+			p.Docs = append(p.Docs, doc)
+		}
+	}
+
+	if f.Comment != nil {
+		b.GenComments[f.Comment] = struct{}{}
+		if doc, err := b.handleCommentGroup(f.Comment); err != nil {
+			p.Docs = append(p.Docs, doc)
+		}
+	}
+
+	// Set the line details of giving commentary.
+	srcd, length, begin, end := compiler.ReadSourceIfPossible(b.Program.Fset, f.Pos(), f.End())
+	p.File = begin.Filename
+	p.Source = string(srcd)
+	p.Begin = begin.Offset
+	p.End = end.Offset
+	p.Length = length
+	p.Line = begin.Line
+	p.LineEnd = end.Line
+	p.Column = begin.Column
+	p.ColumnEnd = end.Column
+
+	pAddr := &p
+
+	p.resolver = func(packages map[string]*Package) error {
+		tl, tlname, meta, err := GetExprType(b, f, t, packages)
+		if err != nil {
+			return err
+		}
+
+		pAddr.Type = tl
+		pAddr.Meta = meta
+		pAddr.TypeName = tlname
+		return nil
+	}
+
+	return p, nil
+}
+
+func (b *ParseScope) handleFieldList(set *ast.FieldList) ([]Field, error) {
+	var params []Field
+	for _, param := range set.List {
+		if len(param.Names) == 0 {
+			p, err := b.handleField(param, param.Type)
+			if err != nil {
+				return params, err
+			}
+
+			params = append(params, p)
+			continue
+		}
+
+		// If we have name as a named Field or named return then
+		// appropriately
+		for _, name := range param.Names {
+			p, err := b.handleFieldWithName(param, name, param.Type)
+			if err != nil {
+				return params, err
+			}
+
+			params = append(params, p)
+		}
+	}
+	return params, nil
+}
+
+func (b *ParseScope) handleParameterWithName(f *ast.Field, nm *ast.Ident, t ast.Expr) (Parameter, error) {
+	var p Parameter
+	p.Name = nm.Name
+
+	if f.Doc != nil {
+		b.GenComments[f.Doc] = struct{}{}
+		if doc, err := b.handleCommentGroup(f.Doc); err != nil {
+			p.Docs = append(p.Docs, doc)
+		}
+	}
+
+	if f.Comment != nil {
+		b.GenComments[f.Comment] = struct{}{}
+		if doc, err := b.handleCommentGroup(f.Comment); err != nil {
+			p.Docs = append(p.Docs, doc)
+		}
+	}
+
+	// Set the line details of giving commentary.
+	srcd, length, begin, end := compiler.ReadSourceIfPossible(b.Program.Fset, f.Pos(), f.End())
+	p.File = begin.Filename
+	p.Source = string(srcd)
+	p.Begin = begin.Offset
+	p.End = end.Offset
+	p.Length = length
+	p.Line = begin.Line
+	p.LineEnd = end.Line
+	p.Column = begin.Column
+	p.ColumnEnd = end.Column
+
+	pAddr := &p
+	if elip, ok := t.(*ast.Ellipsis); ok {
+		p.IsVariadic = true
+		p.resolver = func(packages map[string]*Package) error {
+			tl, tlname, meta, err := GetExprType(b, f, elip.Elt, packages)
+			if err != nil {
+				return err
+			}
+
+			pAddr.Type = tl
+			pAddr.Meta = meta
+			pAddr.TypeName = tlname
+			return nil
+		}
+		return p, nil
+	}
+
+	p.resolver = func(packages map[string]*Package) error {
+		tl, tlname, meta, err := GetExprType(b, f, t, packages)
+		if err != nil {
+			return err
+		}
+
+		pAddr.Type = tl
+		pAddr.Meta = meta
+		pAddr.TypeName = tlname
+		return nil
+	}
+
+	return p, nil
+}
+
+func (b *ParseScope) handleParameter(f *ast.Field, t ast.Expr) (Parameter, error) {
+	var p Parameter
+
+	if f.Doc != nil {
+		b.GenComments[f.Doc] = struct{}{}
+		if doc, err := b.handleCommentGroup(f.Doc); err != nil {
+			p.Docs = append(p.Docs, doc)
+		}
+	}
+
+	if f.Comment != nil {
+		b.GenComments[f.Comment] = struct{}{}
+		if doc, err := b.handleCommentGroup(f.Comment); err != nil {
+			p.Docs = append(p.Docs, doc)
+		}
+	}
+
+	// Set the line details of giving commentary.
+	srcd, length, begin, end := compiler.ReadSourceIfPossible(b.Program.Fset, f.Pos(), f.End())
+	p.File = begin.Filename
+	p.Source = string(srcd)
+	p.Begin = begin.Offset
+	p.End = end.Offset
+	p.Length = length
+	p.Line = begin.Line
+	p.LineEnd = end.Line
+	p.Column = begin.Column
+	p.ColumnEnd = end.Column
+
+	pAddr := &p
+	if elip, ok := t.(*ast.Ellipsis); ok {
+		p.IsVariadic = true
+		p.resolver = func(packages map[string]*Package) error {
+			tl, tlname, meta, err := GetExprType(b, f, elip.Elt, packages)
+			if err != nil {
+				return err
+			}
+
+			pAddr.Type = tl
+			pAddr.Meta = meta
+			pAddr.TypeName = tlname
+			return nil
+		}
+		return p, nil
+	}
+
+	p.resolver = func(packages map[string]*Package) error {
+		tl, tlname, meta, err := GetExprType(b, f, t, packages)
+		if err != nil {
+			return err
+		}
+
+		pAddr.Type = tl
+		pAddr.Meta = meta
+		pAddr.TypeName = tlname
+		return nil
+	}
+
+	return p, nil
+}
+
 func (b *ParseScope) handleParameterList(set *ast.FieldList) ([]Parameter, error) {
 	var params []Parameter
 	for _, param := range set.List {
+		if len(param.Names) == 0 {
+			p, err := b.handleParameter(param, param.Type)
+			if err != nil {
+				return params, err
+			}
+
+			params = append(params, p)
+			continue
+		}
+
+		// If we have name as a named parameter or named return then
+		// appropriately
 		for _, name := range param.Names {
-			params = append(params, func(t ast.Expr, nm *ast.Ident, f *ast.Field) Parameter {
-				var p Parameter
-				p.Name = nm.Name
+			p, err := b.handleParameterWithName(param, name, param.Type)
+			if err != nil {
+				return params, err
+			}
 
-				if f.Doc != nil {
-					b.GenComments[f.Doc] = struct{}{}
-					if doc, err := b.handleCommentGroup(f.Doc); err != nil {
-						p.Docs = append(p.Docs, doc)
-					}
-				}
-
-				if f.Comment != nil {
-					b.GenComments[f.Comment] = struct{}{}
-					if doc, err := b.handleCommentGroup(f.Comment); err != nil {
-						p.Docs = append(p.Docs, doc)
-					}
-				}
-
-				// Set the line details of giving commentary.
-				length, begin, end := compiler.GetPosition(b.Program.Fset, name.Pos(), name.End())
-				p.File = begin.Filename
-				p.Begin = begin.Offset
-				p.End = end.Offset
-				p.Length = length
-				p.Line = begin.Line
-				p.LineEnd = end.Line
-				p.Column = begin.Column
-				p.ColumnEnd = end.Column
-
-				if elip, ok := t.(*ast.Ellipsis); ok {
-					p.IsVariadic = true
-					p.resolver = func(packages map[string]*Package) error {
-						tl, tlname, err := GetExprType(b, elip.Elt, packages)
-						if err != nil {
-							return err
-						}
-
-						p.Type = tl
-						p.TypeName = tlname
-						return nil
-					}
-					return p
-				}
-
-				p.resolver = func(packages map[string]*Package) error {
-					tl, tlname, err := GetExprType(b, t, packages)
-					if err != nil {
-						return err
-					}
-
-					p.Type = tl
-					p.TypeName = tlname
-					return nil
-				}
-
-				return p
-			}(param.Type, name, param))
+			params = append(params, p)
 		}
 	}
 	return params, nil
@@ -463,7 +672,8 @@ func (b *ParseScope) handleCommentGroup(gdoc *ast.CommentGroup) (Doc, error) {
 	doc.Parts = make([]DocText, 0, len(gdoc.List))
 
 	// Set the line details of giving commentary.
-	length, begin, end := compiler.GetPosition(b.Program.Fset, gdoc.Pos(), gdoc.End())
+	srcd, length, begin, end := compiler.ReadSourceIfPossible(b.Program.Fset, gdoc.Pos(), gdoc.End())
+	doc.Source = string(srcd)
 	doc.File = begin.Filename
 	doc.Begin = begin.Offset
 	doc.End = end.Offset
@@ -482,9 +692,10 @@ func (b *ParseScope) handleCommentGroup(gdoc *ast.CommentGroup) (Doc, error) {
 }
 
 func (b *ParseScope) handleDocText(c *ast.Comment) DocText {
-	length, begin, end := compiler.GetPosition(b.Program.Fset, c.Pos(), c.End())
+	srcd, length, begin, end := compiler.ReadSourceIfPossible(b.Program.Fset, c.Pos(), c.End())
 
 	var doc DocText
+	doc.Source = string(srcd)
 	doc.File = begin.Filename
 	doc.Text = c.Text
 	doc.Begin = begin.Offset
@@ -501,8 +712,94 @@ func (b *ParseScope) handleDocText(c *ast.Comment) DocText {
 //  Utilities
 //******************************************************************************
 
-func GetExprType(base *ParseScope, expr ast.Expr, others map[string]*Package) (interface{}, string, error) {
-	return nil, "", nil
+func GetExprType(base *ParseScope, f *ast.Field, expr ast.Expr, others map[string]*Package) (interface{}, string, Meta, error) {
+	var meta Meta
+
+	switch t := expr.(type) {
+	case *ast.Ident:
+		if obj := base.Info.ObjectOf(t); obj != nil {
+
+		}
+
+		return &Base{
+			Name:     t.Name,
+			Exported: t.IsExported(),
+		}, t.Name, meta, nil
+
+	case *ast.BasicLit:
+		return &Base{
+			Name:     t.Value,
+			Exported: true,
+		}, t.Value, meta, nil
+	case *ast.StarExpr:
+	case *ast.UnaryExpr:
+	case *ast.SelectorExpr:
+	case *ast.IndexExpr:
+	case *ast.CallExpr:
+	case *ast.CompositeLit:
+	case *ast.ArrayType:
+	case *ast.FuncLit:
+	case *ast.ParenExpr:
+	case *ast.KeyValueExpr:
+	case *ast.MapType:
+	case *ast.BinaryExpr:
+	case *ast.InterfaceType:
+	}
+
+	return nil, "", meta, nil
+}
+
+func GetTypeFromSet(base *ParseScope, others map[string]*Package, obj types.Object) (Expr, error) {
+	targetPkg, ok := others[obj.Pkg().Path()]
+	if !ok {
+		return nil, errors.New("not found")
+	}
+
+	switch t := obj.Type.(type) {
+	case *ast.Ident:
+	case *ast.BasicLit:
+	case *ast.StarExpr:
+	case *ast.UnaryExpr:
+	case *ast.SelectorExpr:
+	case *ast.IndexExpr:
+	case *ast.CallExpr:
+	case *ast.CompositeLit:
+	case *ast.ArrayType:
+	case *ast.FuncLit:
+	case *ast.ParenExpr:
+	case *ast.KeyValueExpr:
+	case *ast.MapType:
+	case *ast.BinaryExpr:
+	case *ast.InterfaceType:
+	}
+}
+
+var (
+	moreSpaces = regexp.MustCompile(`\s+`)
+	itag       = regexp.MustCompile(`(\w+):"(\w+|[\w,?\s+\w]+)"`)
+	annotation = regexp.MustCompile("@(\\w+(:\\w+)?)(\\([.\\s\\S]+\\))?")
+)
+
+// GetTags returns all associated tag within provided string.
+func GetTags(content string) []Tag {
+	var tags []Tag
+	cleaned := moreSpaces.ReplaceAllString(content, " ")
+	for _, tag := range strings.Split(cleaned, " ") {
+		if !itag.MatchString(tag) {
+			continue
+		}
+
+		res := itag.FindStringSubmatch(tag)
+		resValue := strings.Split(res[2], ",")
+
+		tags = append(tags, Tag{
+			Text:  res[0],
+			Name:  res[1],
+			Value: resValue[0],
+			Meta:  resValue[1:],
+		})
+	}
+	return tags
 }
 
 func getExprName(n interface{}) (string, error) {

@@ -2,6 +2,12 @@ package compiler
 
 import "golang.org/x/tools/go/loader"
 
+// Expr defines a interface exposing a giving method.
+type Expr interface {
+	Ref() string
+	Location() *Location
+}
+
 // ResolverFn defines a function type representing
 // a function taking in a map of packages, returning
 // an error.
@@ -19,6 +25,22 @@ type Location struct {
 	LineEnd   int
 	Column    int
 	ColumnEnd int
+	Source    string
+}
+
+// Location implements the Expr interface.
+func (l Location) Location() Location {
+	return l
+}
+
+// Ref stores giving RefName value for  type.
+type Ref struct {
+	RefName string
+}
+
+// Ref implements the Expr interface.
+func (f Ref) Ref() string {
+	return f.RefName
 }
 
 // DocText embodies a file level text not
@@ -88,21 +110,59 @@ type Package struct {
 	Types      map[string]*Type
 	Structs    map[string]*Struct
 	Interfaces map[string]*Interface
+	Maps       map[string]*Map
+	Slices     map[string]*Slice
 	Functions  map[string]*Function
+	Methods    map[string]*Function
 	Depends    map[string]*Package
 	Files      map[string]*PackageFile
+}
+
+// Tag embodies a field tag and it's value declared
+// for a struct field.
+type Tag struct {
+	Name  string
+	Value string
+	Text  string
+	Meta  []string
+}
+
+// Annotation embodies an annotation declaration made
+// in regards to a declared struct, type or interface
+// declaration either within declaration commentary or
+// within source files.
+type Annotation struct {
+	Name     string
+	Template string
+	After    []string
+	Flags    []string
+	Params   map[string]string
 }
 
 // Add adds giving declaration into package declaration
 // types according to it's class.
 func (p *Package) Add(declr interface{}) error {
 	switch rdeclr := declr.(type) {
+	case Doc:
+		p.Docs = append(p.Docs, rdeclr)
 	case *Package:
 		p.Depends[rdeclr.Name] = rdeclr
+	case *Type:
+		p.Types[rdeclr.Name] = rdeclr
+	case *Interface:
+		p.Interfaces[rdeclr.Name] = rdeclr
 	case *Struct:
+		p.Structs[rdeclr.Name] = rdeclr
 	case *Function:
+		if rdeclr.IsMethod {
+			p.Methods[rdeclr.Name] = rdeclr
+		} else {
+			p.Functions[rdeclr.Name] = rdeclr
+		}
 	case *Map:
+		p.Maps[rdeclr.Name] = rdeclr
 	case *Slice:
+		p.Slices[rdeclr.Name] = rdeclr
 	case Variable:
 		if rdeclr.Blank {
 			p.Blanks = append(p.Blanks, rdeclr)
@@ -115,7 +175,7 @@ func (p *Package) Add(declr interface{}) error {
 	return nil
 }
 
-// Resolve provides the list of indexed packages to internal structures
+// Resolve takes the list of indexed packages to internal structures
 // to resolve imported or internal types that they reference. This is
 // used to ensure all package structures have direct link to parsed
 // type.
@@ -161,6 +221,7 @@ func (p *Package) Resolve(indexed map[string]*Package) error {
 // Interface embodies necessary data related to declared
 // interface types within a package.
 type Interface struct {
+	Ref
 	Location
 
 	// Path represents the giving full qualified package path name
@@ -187,7 +248,7 @@ type Interface struct {
 	resolver ResolverFn
 }
 
-// Resolve provides the list of indexed packages to internal structures
+// Resolve takes the list of indexed packages to internal structures
 // to resolve imported or internal types that they reference. This is
 // used to ensure all package structures have direct link to parsed
 // type.
@@ -203,6 +264,7 @@ func (p *Interface) Resolve(indexed map[string]*Package) error {
 // Struct embodies necessary data related to declared
 // struct types within a package.
 type Struct struct {
+	Ref
 	Location
 
 	// Path represents the giving full qualified package path name
@@ -229,7 +291,7 @@ type Struct struct {
 	resolver ResolverFn
 }
 
-// Resolve provides the list of indexed packages to internal structures
+// Resolve takes the list of indexed packages to internal structures
 // to resolve imported or internal types that they reference. This is
 // used to ensure all package structures have direct link to parsed
 // type.
@@ -246,6 +308,7 @@ func (p *Struct) Resolve(indexed map[string]*Package) error {
 // package functions, struct methods, interface
 // methods or function closures.
 type Function struct {
+	Ref
 	Location
 
 	// Path represents the giving full qualified package path name
@@ -257,6 +320,10 @@ type Function struct {
 
 	// Exported is used to indicate if type is exported or not.
 	Exported bool
+
+	// IsMethod indicates if giving function is a method of a struct or a method
+	// contract for an interface.
+	IsMethod bool
 
 	// IsAsync indicates whether function is called
 	// asynchronously in goroutine.
@@ -290,7 +357,7 @@ type Function struct {
 	resolver ResolverFn
 }
 
-// Resolve provides the list of indexed packages to internal structures
+// Resolve takes the list of indexed packages to internal structures
 // to resolve imported or internal types that they reference. This is
 // used to ensure all package structures have direct link to parsed
 // type.
@@ -306,7 +373,12 @@ func (p *Function) Resolve(indexed map[string]*Package) error {
 // Field represents field types and names
 // declared as part of a struct's properties.
 type Field struct {
+	Ref
 	Location
+
+	// Docs are the documentation related to giving
+	// parameter within source.
+	Docs []Doc
 
 	// Path represents the giving full qualified package path name
 	// and type name of type in format: PackagePath.TypeName.
@@ -331,7 +403,7 @@ type Field struct {
 	resolver ResolverFn
 }
 
-// Resolve provides the list of indexed packages to internal structures
+// Resolve takes the list of indexed packages to internal structures
 // to resolve imported or internal types that they reference. This is
 // used to ensure all package structures have direct link to parsed
 // type.
@@ -350,6 +422,8 @@ func (p *Field) Resolve(indexed map[string]*Package) error {
 type Parameter struct {
 	Location
 
+	// Docs are the documentation related to giving
+	// parameter within source.
 	Docs []Doc
 
 	// Name represents the name of giving interface.
@@ -374,7 +448,7 @@ type Parameter struct {
 	resolver ResolverFn
 }
 
-// Resolve provides the list of indexed packages to internal structures
+// Resolve takes the list of indexed packages to internal structures
 // to resolve imported or internal types that they reference. This is
 // used to ensure all package structures have direct link to parsed
 // type.
@@ -390,6 +464,7 @@ func (p *Parameter) Resolve(indexed map[string]*Package) error {
 // Map embodies a giving map type with
 // an associated name, value and key type.
 type Map struct {
+	Ref
 	Location
 
 	// Path represents the giving full qualified package path name
@@ -418,7 +493,7 @@ type Map struct {
 	resolver ResolverFn
 }
 
-// Resolve provides the list of indexed packages to internal structures
+// Resolve takes the list of indexed packages to internal structures
 // to resolve imported or internal types that they reference. This is
 // used to ensure all package structures have direct link to parsed
 // type.
@@ -434,6 +509,7 @@ func (p *Map) Resolve(indexed map[string]*Package) error {
 // Slice embodies a giving slice type with
 // an associated name and type.
 type Slice struct {
+	Ref
 	Location
 
 	// Path represents the giving full qualified package path name
@@ -462,7 +538,7 @@ type Slice struct {
 	resolver ResolverFn
 }
 
-// Resolve provides the list of indexed packages to internal structures
+// Resolve takes the list of indexed packages to internal structures
 // to resolve imported or internal types that they reference. This is
 // used to ensure all package structures have direct link to parsed
 // type.
@@ -478,6 +554,7 @@ func (p *Slice) Resolve(indexed map[string]*Package) error {
 // Channel embodies a channel type declared
 // with a golang package.
 type Channel struct {
+	Ref
 	Location
 
 	// Path represents the giving full qualified package path name
@@ -506,7 +583,7 @@ type Channel struct {
 	resolver ResolverFn
 }
 
-// Resolve provides the list of indexed packages to internal structures
+// Resolve takes the list of indexed packages to internal structures
 // to resolve imported or internal types that they reference. This is
 // used to ensure all package structures have direct link to parsed
 // type.
@@ -522,6 +599,7 @@ func (p *Channel) Resolve(indexed map[string]*Package) error {
 // Variable embodies data related to declared
 // variable.
 type Variable struct {
+	Ref
 	Location
 
 	// Type sets the value object/declared type.
@@ -557,7 +635,7 @@ type Variable struct {
 	resolver ResolverFn
 }
 
-// Resolve provides the list of indexed packages to internal structures
+// Resolve takes the list of indexed packages to internal structures
 // to resolve imported or internal types that they reference. This is
 // used to ensure all package structures have direct link to parsed
 // type.
@@ -573,6 +651,7 @@ func (p *Variable) Resolve(indexed map[string]*Package) error {
 // Constant holds related data related to information
 // pertaining to declared constants.
 type Constant struct {
+	Ref
 	Location
 
 	// Path represents the giving full qualified package path name
@@ -597,7 +676,7 @@ type Constant struct {
 	resolver ResolverFn
 }
 
-// Resolve provides the list of indexed packages to internal structures
+// Resolve takes the list of indexed packages to internal structures
 // to resolve imported or internal types that they reference. This is
 // used to ensure all package structures have direct link to parsed
 // type.
@@ -614,11 +693,14 @@ func (p *Constant) Resolve(indexed map[string]*Package) error {
 // strings, int types, floats, complex, etc, which are
 // atomic indivisible types.
 type Base struct {
+	Ref
+	Location
+
 	// Path represents the giving full qualified package path name
 	// and type name of type in format: PackagePath.TypeName.
 	Path string
 
-	// Name represents the name of giving interface.
+	// Name represents the name of giving type.
 	Name string
 
 	// Exported is used to indicate if type is exported or not.
@@ -626,9 +708,6 @@ type Base struct {
 
 	// Type sets the value object/declared type.
 	Type interface{}
-
-	// TypeName represents the type name of object type.
-	TypeName string
 
 	// Meta provides associated package  and commentary information related to
 	// giving type.
@@ -640,7 +719,7 @@ type Base struct {
 	resolver ResolverFn
 }
 
-// Resolve provides the list of indexed packages to internal structures
+// Resolve takes the list of indexed packages to internal structures
 // to resolve imported or internal types that they reference. This is
 // used to ensure all package structures have direct link to parsed
 // type.
@@ -656,6 +735,7 @@ func (p *Base) Resolve(indexed map[string]*Package) error {
 // Type defines a struct holding information about
 // a defined custom type based on an existing type.
 type Type struct {
+	Ref
 	Location
 
 	// Path represents the giving full qualified package path name
@@ -687,7 +767,7 @@ type Type struct {
 	resolver ResolverFn
 }
 
-// Resolve provides the list of indexed packages to internal structures
+// Resolve takes the list of indexed packages to internal structures
 // to resolve imported or internal types that they reference. This is
 // used to ensure all package structures have direct link to parsed
 // type.
@@ -700,10 +780,10 @@ func (p *Type) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
-// ExpressionType defines a int type used to represent giving
+// ExprType defines a int type used to represent giving
 // type of expressions such as assignment, multiplication,
 // division, bracket closing, ...etc.
-type ExpressionType int
+type ExprType int
 
 // Expression provides a generic structure used to represent
 // statements, special characters, symbols and operations generated
@@ -712,28 +792,6 @@ type Expression struct {
 	Location
 
 	Value    string
-	Type     ExpressionType
+	Type     ExprType
 	Children []Expression
-
-	// Meta provides associated package  and commentary information related to
-	// giving type.
-	Meta Meta
-
-	// resolver provides a means of the indexer to provide a custom resolving
-	// function which will run internal logic to set giving values
-	// appropriately during resolution of types.
-	resolver ResolverFn
-}
-
-// Resolve provides the list of indexed packages to internal structures
-// to resolve imported or internal types that they reference. This is
-// used to ensure all package structures have direct link to parsed
-// type.
-func (p *Expression) Resolve(indexed map[string]*Package) error {
-	if p.resolver != nil {
-		if err := p.resolver(indexed); err != nil {
-			return err
-		}
-	}
-	return nil
 }
