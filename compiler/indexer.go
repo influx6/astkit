@@ -1,7 +1,6 @@
 package compiler
 
 import (
-	"errors"
 	"fmt"
 	"go/ast"
 	"go/types"
@@ -18,7 +17,7 @@ import (
 
 	"context"
 
-	"gitlab.com/gokit/astkit/internal/compiler"
+	"github.com/gokit/astkit/internal/compiler"
 	"golang.org/x/tools/go/loader"
 )
 
@@ -750,28 +749,16 @@ func GetExprType(base *ParseScope, f *ast.Field, expr ast.Expr, others map[strin
 }
 
 func GetTypeFromSet(base *ParseScope, others map[string]*Package, obj types.Object) (Expr, error) {
-	targetPkg, ok := others[obj.Pkg().Path()]
-	if !ok {
-		return nil, errors.New("not found")
-	}
+	//targetPkg, ok := others[obj.Pkg().Path()]
+	//if !ok {
+	//	return nil, errors.New("not found")
+	//}
 
-	switch t := obj.Type.(type) {
-	case *ast.Ident:
-	case *ast.BasicLit:
-	case *ast.StarExpr:
-	case *ast.UnaryExpr:
-	case *ast.SelectorExpr:
-	case *ast.IndexExpr:
-	case *ast.CallExpr:
-	case *ast.CompositeLit:
-	case *ast.ArrayType:
-	case *ast.FuncLit:
-	case *ast.ParenExpr:
-	case *ast.KeyValueExpr:
-	case *ast.MapType:
-	case *ast.BinaryExpr:
-	case *ast.InterfaceType:
-	}
+	//switch obj.Type().(type) {
+	//
+	//}
+
+	return nil, nil
 }
 
 var (

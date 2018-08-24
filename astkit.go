@@ -3,7 +3,7 @@ package astkit
 import (
 	"context"
 
-	"gitlab.com/gokit/astkit/compiler"
+	"github.com/gokit/astkit/compiler"
 )
 
 // Transform takes provided package path returning a package

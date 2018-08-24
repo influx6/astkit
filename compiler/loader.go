@@ -10,7 +10,7 @@ import (
 
 	"os"
 
-	"gitlab.com/gokit/astkit/internal/runtime"
+	"github.com/gokit/astkit/internal/runtime"
 	"golang.org/x/tools/go/loader"
 )
 

@@ -2,7 +2,7 @@ package compiler
 
 import "go/token"
 
-import "gitlab.com/gokit/astkit/internal/ioutil"
+import "github.com/gokit/astkit/internal/ioutil"
 
 // ReadSource returns giving source lines and token.Position for giving target.
 // If an error occurred in attempt to load the source, the error is returned and

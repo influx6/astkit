@@ -6,7 +6,7 @@ import (
 	"context"
 
 	"github.com/stretchr/testify/assert"
-	"gitlab.com/gokit/astkit"
+	"github.com/gokit/astkit"
 )
 
 func TestTransform(t *testing.T) {
