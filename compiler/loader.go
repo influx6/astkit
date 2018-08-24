@@ -104,9 +104,9 @@ func (cg *Cg) init() error {
 }
 
 // Import returns the build.Package for target import path.
-func (c Cg) Import(ctxt *build.Context, importPath, fromDir string, mode build.ImportMode) (*build.Package, error) {
-	if c.Importer != nil {
-		if loaded, err := c.Importer(ctxt, importPath, fromDir, mode); err == nil {
+func (cg Cg) Import(ctxt *build.Context, importPath, fromDir string, mode build.ImportMode) (*build.Package, error) {
+	if cg.Importer != nil {
+		if loaded, err := cg.Importer(ctxt, importPath, fromDir, mode); err == nil {
 			return loaded, nil
 		}
 	}

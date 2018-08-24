@@ -5,8 +5,8 @@ import (
 
 	"context"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/gokit/astkit"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestTransform(t *testing.T) {
