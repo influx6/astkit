@@ -2,9 +2,14 @@ package compiler
 
 import "golang.org/x/tools/go/loader"
 
+// ExprType defines a int type used to represent giving
+// type of expressions such as assignment, multiplication,
+// division, bracket closing, ...etc.
+type ExprType int
+
 // Resolvable defines an interface which exposes a method for
 // resolution of internal operations.
-type Resolvable interface{
+type Resolvable interface {
 	Resolve(map[string]*Package) error
 }
 
@@ -36,7 +41,7 @@ type Location struct {
 	Source    string
 }
 
-// Location implements the Expr interface.
+// Loc implements the Expr interface.
 func (l Location) Loc() Location {
 	return l
 }
@@ -80,7 +85,6 @@ type Annotation struct {
 	Params   map[string]string
 }
 
-
 // Annotated defines a embeddable struct which declared
 // a single field that contains all associated declared
 // annotations.
@@ -122,6 +126,23 @@ type Import struct {
 	Docs    []Doc
 }
 
+// Expression provides a generic structure used to represent
+// statements, special characters, symbols and operations generated
+// from source code.
+type Expression struct {
+	Location
+
+	Value    string
+	Type     ExprType
+	Children []Expression
+}
+
+// Ref returns an empty string, has Expression
+// has no giving reference string.
+func (e Expression) Ref() string {
+	return ""
+}
+
 // PackageFile defines a giving package file with it's associated
 // definitions, constructs and declarations. It provides the
 // one-to-one relation of a parsed package.
@@ -154,7 +175,6 @@ type Package struct {
 	Depends    map[string]*Package
 	Files      map[string]*PackageFile
 }
-
 
 // Add adds giving declaration into package declaration
 // types according to it's class.
@@ -234,7 +254,6 @@ func (p *Package) Resolve(indexed map[string]*Package) error {
 	}
 	return nil
 }
-
 
 // Field represents field types and names
 // declared as part of a types's properties.
@@ -671,7 +690,6 @@ type Interface struct {
 	// Exported is used to indicate if type is exported or not.
 	Exported bool
 
-
 	// Composes contains all other interface types composed by
 	// given interface type.
 	Composes map[string]*Interface
@@ -728,7 +746,6 @@ type Struct struct {
 	// Embeds contains all struct types composed by
 	// given struct type.
 	Embeds map[string]*Struct
-
 
 	// Fields contains all fields and associated types declared
 	// as members of struct.
@@ -810,7 +827,6 @@ type Function struct {
 	// function is attached to else an empty string.
 	OwnerName string
 
-
 	// Arguments provides the argument list for giving function.
 	Arguments []Parameter
 
@@ -853,20 +869,4 @@ func (p *Function) Resolve(indexed map[string]*Package) error {
 		}
 	}
 	return nil
-}
-
-// ExprType defines a int type used to represent giving
-// type of expressions such as assignment, multiplication,
-// division, bracket closing, ...etc.
-type ExprType int
-
-// Expression provides a generic structure used to represent
-// statements, special characters, symbols and operations generated
-// from source code.
-type Expression struct {
-	Location
-
-	Value    string
-	Type     ExprType
-	Children []Expression
 }

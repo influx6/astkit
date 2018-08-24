@@ -91,7 +91,10 @@ type Cg struct {
 
 func (cg *Cg) init() error {
 	if cg.PackageDir == "" {
-		dir, _ := os.Getwd()
+		dir, err := os.Getwd()
+		if err != nil {
+			return err
+		}
 		cg.PackageDir = dir
 	}
 	if cg.GoPath == "" {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/types"
+	"log"
 	"regexp"
 	"strings"
 
@@ -151,7 +152,9 @@ func (indexer *Indexer) index(ctx context.Context, pkg *Package, p *loader.Packa
 	go func() {
 		defer indexer.waiter.Done()
 		for elem := range in {
-			pkg.Add(elem)
+			if err := pkg.Add(elem); err != nil {
+				log.Fatalf("Failed to add item into package: %+q", err)
+			}
 		}
 	}()
 
@@ -210,6 +213,11 @@ func (b *ParseScope) Parse(ctx context.Context, in chan interface{}) error {
 				return err
 			}
 		case *ast.GenDecl:
+			for _, spec := range elem.Specs {
+				if err := b.handleDeclarations(ctx, spec, elem, in); err != nil {
+					return err
+				}
+			}
 		case *ast.BadDecl:
 			// Do nothing...
 		}
@@ -219,6 +227,52 @@ func (b *ParseScope) Parse(ctx context.Context, in chan interface{}) error {
 	if err := b.handleCommentaries(); err != nil {
 		return nil
 	}
+
+	return nil
+}
+
+func (b *ParseScope) handleDeclarations(ctx context.Context, spec ast.Spec, gen *ast.GenDecl, in chan interface{}) error {
+	switch obj := spec.(type) {
+	case *ast.ValueSpec:
+		if err := b.handleVariable(ctx, obj, spec, gen, in); err != nil {
+			return err
+		}
+	case *ast.TypeSpec:
+		switch ty := obj.Type.(type) {
+		case *ast.InterfaceType:
+			if err := b.handleInterface(ctx, ty, obj, spec, gen, in); err != nil {
+				return err
+			}
+		case *ast.StructType:
+			if err := b.handleStruct(ctx, ty, obj, spec, gen, in); err != nil {
+				return err
+			}
+		default:
+			if err := b.handleNamedType(ctx, obj, spec, gen, in); err != nil {
+				return err
+			}
+		}
+	case *ast.ImportSpec:
+		// Do nothing ...
+	}
+	return nil
+}
+
+func (b *ParseScope) handleVariable(ctx context.Context, val *ast.ValueSpec, spec ast.Spec, gen *ast.GenDecl, in chan interface{}) error {
+	return nil
+}
+
+func (b *ParseScope) handleStruct(ctx context.Context, str *ast.StructType, ty *ast.TypeSpec, spec ast.Spec, gen *ast.GenDecl, res chan interface{}) error {
+
+	return nil
+}
+
+func (b *ParseScope) handleInterface(ctx context.Context, str *ast.InterfaceType, ty *ast.TypeSpec, spec ast.Spec, gen *ast.GenDecl, res chan interface{}) error {
+
+	return nil
+}
+
+func (b *ParseScope) handleNamedType(ctx context.Context, ty *ast.TypeSpec, spec ast.Spec, gen *ast.GenDecl, res chan interface{}) error {
 
 	return nil
 }
@@ -368,51 +422,11 @@ func (b *ParseScope) handleFieldWithName(f *ast.Field, nm *ast.Ident, t ast.Expr
 		}
 	}
 
-	// Set the line details of giving commentary.
-	srcd, length, begin, end := compiler.ReadSourceIfPossible(b.Program.Fset, f.Pos(), f.End())
-	p.File = begin.Filename
-	p.Source = string(srcd)
-	p.Begin = begin.Offset
-	p.End = end.Offset
-	p.Length = length
-	p.Line = begin.Line
-	p.LineEnd = end.Line
-	p.Column = begin.Column
-	p.ColumnEnd = end.Column
-
-	pAddr := &p
-
-	p.resolver = func(packages map[string]*Package) error {
-		tl, tlname, meta, err := GetExprType(b, f, t, packages)
-		if err != nil {
-			return err
-		}
-
-		pAddr.Type = tl
-		pAddr.Meta = meta
-		pAddr.TypeName = tlname
-		return nil
-	}
-
-	return p, nil
-}
-
-func (b *ParseScope) handleField(f *ast.Field, t ast.Expr) (Field, error) {
-	var p Field
-
-	if f.Doc != nil {
-		b.GenComments[f.Doc] = struct{}{}
-		if doc, err := b.handleCommentGroup(f.Doc); err != nil {
-			p.Docs = append(p.Docs, doc)
-		}
-	}
-
-	if f.Comment != nil {
-		b.GenComments[f.Comment] = struct{}{}
-		if doc, err := b.handleCommentGroup(f.Comment); err != nil {
-			p.Docs = append(p.Docs, doc)
-		}
-	}
+	obj := b.Info.ObjectOf(fn.Name)
+	p.Exported = obj.Exported()
+	p.Meta.Name = obj.Pkg().Name()
+	p.Meta.Path = obj.Pkg().Path()
+	p.Path = strings.Join([]string{obj.Pkg().Path(), fn.Name.Name}, ".")
 
 	// Set the line details of giving commentary.
 	srcd, length, begin, end := compiler.ReadSourceIfPossible(b.Program.Fset, f.Pos(), f.End())
@@ -468,6 +482,79 @@ func (b *ParseScope) handleFieldList(set *ast.FieldList) ([]Field, error) {
 		}
 	}
 	return params, nil
+}
+
+func (b *ParseScope) handleParameterList(set *ast.FieldList) ([]Parameter, error) {
+	var params []Parameter
+	for _, param := range set.List {
+		if len(param.Names) == 0 {
+			p, err := b.handleParameter(param, param.Type)
+			if err != nil {
+				return params, err
+			}
+
+			params = append(params, p)
+			continue
+		}
+
+		// If we have name as a named parameter or named return then
+		// appropriately
+		for _, name := range param.Names {
+			p, err := b.handleParameterWithName(param, name, param.Type)
+			if err != nil {
+				return params, err
+			}
+
+			params = append(params, p)
+		}
+	}
+	return params, nil
+}
+
+func (b *ParseScope) handleField(f *ast.Field, t ast.Expr) (Field, error) {
+	var p Field
+
+	if f.Doc != nil {
+		b.GenComments[f.Doc] = struct{}{}
+		if doc, err := b.handleCommentGroup(f.Doc); err != nil {
+			p.Docs = append(p.Docs, doc)
+		}
+	}
+
+	if f.Comment != nil {
+		b.GenComments[f.Comment] = struct{}{}
+		if doc, err := b.handleCommentGroup(f.Comment); err != nil {
+			p.Docs = append(p.Docs, doc)
+		}
+	}
+
+	// Set the line details of giving commentary.
+	srcd, length, begin, end := compiler.ReadSourceIfPossible(b.Program.Fset, f.Pos(), f.End())
+	p.File = begin.Filename
+	p.Source = string(srcd)
+	p.Begin = begin.Offset
+	p.End = end.Offset
+	p.Length = length
+	p.Line = begin.Line
+	p.LineEnd = end.Line
+	p.Column = begin.Column
+	p.ColumnEnd = end.Column
+
+	pAddr := &p
+
+	p.resolver = func(packages map[string]*Package) error {
+		tl, tlname, meta, err := GetExprType(b, f, t, packages)
+		if err != nil {
+			return err
+		}
+
+		pAddr.Type = tl
+		pAddr.Meta = meta
+		pAddr.TypeName = tlname
+		return nil
+	}
+
+	return p, nil
 }
 
 func (b *ParseScope) handleParameterWithName(f *ast.Field, nm *ast.Ident, t ast.Expr) (Parameter, error) {
@@ -593,58 +680,6 @@ func (b *ParseScope) handleParameter(f *ast.Field, t ast.Expr) (Parameter, error
 	return p, nil
 }
 
-func (b *ParseScope) handleParameterList(set *ast.FieldList) ([]Parameter, error) {
-	var params []Parameter
-	for _, param := range set.List {
-		if len(param.Names) == 0 {
-			p, err := b.handleParameter(param, param.Type)
-			if err != nil {
-				return params, err
-			}
-
-			params = append(params, p)
-			continue
-		}
-
-		// If we have name as a named parameter or named return then
-		// appropriately
-		for _, name := range param.Names {
-			p, err := b.handleParameterWithName(param, name, param.Type)
-			if err != nil {
-				return params, err
-			}
-
-			params = append(params, p)
-		}
-	}
-	return params, nil
-}
-
-func (b *ParseScope) handleStructSpec(str *ast.StructType, res chan interface{}) error {
-
-	return nil
-}
-
-func (b *ParseScope) handleChannelSpec() error {
-
-	return nil
-}
-
-func (b *ParseScope) handleValueSpec() error {
-
-	return nil
-}
-
-func (b *ParseScope) handleMapSpec() error {
-
-	return nil
-}
-
-func (b *ParseScope) handleSliceSpec() error {
-
-	return nil
-}
-
 func (b *ParseScope) handleCommentaries() error {
 	for _, cdoc := range b.File.Comments {
 		if _, ok := b.GenComments[cdoc]; ok {
@@ -711,6 +746,8 @@ func (b *ParseScope) handleDocText(c *ast.Comment) DocText {
 //  Utilities
 //******************************************************************************
 
+// GetExprType returns the associated type of a giving ast.Expr by tracking the package and type that it
+// is declared as.
 func GetExprType(base *ParseScope, f *ast.Field, expr ast.Expr, others map[string]*Package) (interface{}, string, Meta, error) {
 	var meta Meta
 
@@ -748,6 +785,7 @@ func GetExprType(base *ParseScope, f *ast.Field, expr ast.Expr, others map[strin
 	return nil, "", meta, nil
 }
 
+// GetTyepFromSet attempts to return a concrete Expr object which implements interface from types.Object provided.
 func GetTypeFromSet(base *ParseScope, others map[string]*Package, obj types.Object) (Expr, error) {
 	//targetPkg, ok := others[obj.Pkg().Path()]
 	//if !ok {
