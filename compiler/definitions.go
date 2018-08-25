@@ -13,6 +13,12 @@ type Resolvable interface {
 	Resolve(map[string]*Package) error
 }
 
+// Identity defines an interface that exposes a single method
+// to retrieve name of giving implementer.
+type Identity interface {
+	ID() string
+}
+
 // Expr defines a interface exposing a giving method.
 type Expr interface {
 	Resolvable
@@ -46,14 +52,14 @@ func (l Location) Loc() Location {
 	return l
 }
 
-// Ref stores giving RefName value for  type.
-type Ref struct {
-	RefName string
+// Pathway stores giving PathwayName value for  type.
+type Pathway struct {
+	Path string
 }
 
-// Ref implements the Expr interface.
-func (f Ref) Ref() string {
-	return f.RefName
+// Ref implements the Expr interface and returns the vale of Pathway.Path field.
+func (f Pathway) Ref() string {
+	return f.Path
 }
 
 // DocText embodies a file level text not
@@ -185,21 +191,21 @@ func (p *Package) Add(obj interface{}) error {
 	case *Package:
 		p.Depends[elem.Name] = elem
 	case *Type:
-		p.Types[elem.Name] = elem
+		p.Types[elem.Ref()] = elem
 	case *Interface:
-		p.Interfaces[elem.Name] = elem
+		p.Interfaces[elem.Ref()] = elem
 	case *Struct:
-		p.Structs[elem.Name] = elem
+		p.Structs[elem.Ref()] = elem
 	case *Function:
 		if elem.IsMethod {
-			p.Methods[elem.Name] = elem
+			p.Methods[elem.Ref()] = elem
 		} else {
-			p.Functions[elem.Name] = elem
+			p.Functions[elem.Ref()] = elem
 		}
 	case *Map:
-		p.Maps[elem.Name] = elem
+		p.Maps[elem.Ref()] = elem
 	case *Slice:
-		p.Slices[elem.Name] = elem
+		p.Slices[elem.Ref()] = elem
 	case Variable:
 		if elem.Blank {
 			p.Blanks = append(p.Blanks, elem)
@@ -213,7 +219,7 @@ func (p *Package) Add(obj interface{}) error {
 }
 
 // Resolve takes the list of indexed packages to internal structures
-// to resolve imported or internal types that they reference. This is
+// to resolve imported or internal types that they Pathwayerence. This is
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Package) Resolve(indexed map[string]*Package) error {
@@ -258,32 +264,33 @@ func (p *Package) Resolve(indexed map[string]*Package) error {
 // Field represents field types and names
 // declared as part of a types's properties.
 type Field struct {
-	Ref
+	Pathway
 	Location
+
+	// Exported holds giving flag where field is an
+	// exported field or not.
+	Exported bool
 
 	// Docs are the documentation related to giving
 	// parameter within source.
 	Docs []Doc
 
-	// Path represents the giving full qualified package path name
-	// and type name of type in format: PackagePath.TypeName.
-	Path string
-
 	// Name represents the name of giving interface.
 	Name string
 
-	// Tags contains a map of all declared tags for giving fields.
-	Tags map[string]Tag
+	// Tags contains a all declared tags for giving fields.
+	Tags []Tag
 
 	// Meta provides associated package  and commentary information related to
 	// giving type.
 	Meta Meta
 
 	// Type sets the value object/declared type.
-	Type interface{}
+	Type Identity
 
-	// TypeName represents the type name of object type.
-	TypeName string
+	// Import contains import details for giving field type used in Pathwayerence
+	// within declaration of struct.
+	Import *Import
 
 	// resolver provides a means of the indexer to provide a custom resolving
 	// function which will run internal logic to set giving values
@@ -292,7 +299,7 @@ type Field struct {
 }
 
 // Resolve takes the list of indexed packages to internal structures
-// to resolve imported or internal types that they reference. This is
+// to resolve imported or internal types that they Pathwayerence. This is
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Field) Resolve(indexed map[string]*Package) error {
@@ -308,6 +315,7 @@ func (p *Field) Resolve(indexed map[string]*Package) error {
 // provided to a function, method or function type
 // declaration.
 type Parameter struct {
+	Pathway
 	Location
 
 	// Docs are the documentation related to giving
@@ -318,13 +326,14 @@ type Parameter struct {
 	Name string
 
 	// Type sets the value object/declared type.
-	Type interface{}
-
-	// TypeName represents the type name of object type.
-	TypeName string
+	Type Identity
 
 	// IsVariadic indicates if giving parameter is variadic.
 	IsVariadic bool
+
+	// Import contains import details for giving field type used in Pathwayerence
+	// within declaration of argument.
+	Import *Import
 
 	// Meta provides associated package  and commentary information related to
 	// giving type.
@@ -337,7 +346,7 @@ type Parameter struct {
 }
 
 // Resolve takes the list of indexed packages to internal structures
-// to resolve imported or internal types that they reference. This is
+// to resolve imported or internal types that they Pathwayerence. This is
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Parameter) Resolve(indexed map[string]*Package) error {
@@ -352,12 +361,8 @@ func (p *Parameter) Resolve(indexed map[string]*Package) error {
 // Map embodies a giving map type with
 // an associated name, value and key type.
 type Map struct {
-	Ref
+	Pathway
 	Location
-
-	// Path represents the giving full qualified package path name
-	// and type name of type in format: PackagePath.TypeName.
-	Path string
 
 	// Name represents the name of giving interface.
 	Name string
@@ -366,10 +371,10 @@ type Map struct {
 	Exported bool
 
 	// KeyType sets the key type for giving map type.
-	KeyType interface{}
+	KeyType Identity
 
 	// ValueType sets the value type for giving map type.
-	ValueType interface{}
+	ValueType Identity
 
 	// Meta provides associated package  and commentary information related to
 	// giving type.
@@ -382,7 +387,7 @@ type Map struct {
 }
 
 // Resolve takes the list of indexed packages to internal structures
-// to resolve imported or internal types that they reference. This is
+// to resolve imported or internal types that they Pathwayerence. This is
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Map) Resolve(indexed map[string]*Package) error {
@@ -397,12 +402,8 @@ func (p *Map) Resolve(indexed map[string]*Package) error {
 // Slice embodies a giving slice type with
 // an associated name and type.
 type Slice struct {
-	Ref
+	Pathway
 	Location
-
-	// Path represents the giving full qualified package path name
-	// and type name of type in format: PackagePath.TypeName.
-	Path string
 
 	// Name represents the name of giving interface.
 	Name string
@@ -411,10 +412,7 @@ type Slice struct {
 	Exported bool
 
 	// Type sets the value object/declared type.
-	Type interface{}
-
-	// TypeName represents the type name of object type.
-	TypeName string
+	Type Identity
 
 	// Meta provides associated package  and commentary information related to
 	// giving type.
@@ -427,7 +425,7 @@ type Slice struct {
 }
 
 // Resolve takes the list of indexed packages to internal structures
-// to resolve imported or internal types that they reference. This is
+// to resolve imported or internal types that they Pathwayerence. This is
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Slice) Resolve(indexed map[string]*Package) error {
@@ -442,12 +440,8 @@ func (p *Slice) Resolve(indexed map[string]*Package) error {
 // Channel embodies a channel type declared
 // with a golang package.
 type Channel struct {
-	Ref
+	Pathway
 	Location
-
-	// Path represents the giving full qualified package path name
-	// and type name of type in format: PackagePath.TypeName.
-	Path string
 
 	// Name represents the name of giving interface.
 	Name string
@@ -460,10 +454,7 @@ type Channel struct {
 	Meta Meta
 
 	// Type sets the value object/declared type.
-	Type interface{}
-
-	// TypeName represents the type name of object type.
-	TypeName string
+	Type Identity
 
 	// resolver provides a means of the indexer to provide a custom resolving
 	// function which will run internal logic to set giving values
@@ -472,7 +463,7 @@ type Channel struct {
 }
 
 // Resolve takes the list of indexed packages to internal structures
-// to resolve imported or internal types that they reference. This is
+// to resolve imported or internal types that they Pathwayerence. This is
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Channel) Resolve(indexed map[string]*Package) error {
@@ -487,14 +478,11 @@ func (p *Channel) Resolve(indexed map[string]*Package) error {
 // Variable embodies data related to declared
 // variable.
 type Variable struct {
-	Ref
+	Pathway
 	Location
 
 	// Type sets the value object/declared type.
-	Type interface{}
-
-	// TypeName represents the type name of object type.
-	TypeName string
+	Type Identity
 
 	// Path represents the giving full qualified package path name
 	// and type name of type in format: PackagePath.TypeName.
@@ -524,7 +512,7 @@ type Variable struct {
 }
 
 // Resolve takes the list of indexed packages to internal structures
-// to resolve imported or internal types that they reference. This is
+// to resolve imported or internal types that they Pathwayerence. This is
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Variable) Resolve(indexed map[string]*Package) error {
@@ -539,12 +527,8 @@ func (p *Variable) Resolve(indexed map[string]*Package) error {
 // Constant holds related data related to information
 // pertaining to declared constants.
 type Constant struct {
-	Ref
+	Pathway
 	Location
-
-	// Path represents the giving full qualified package path name
-	// and type name of type in format: PackagePath.TypeName.
-	Path string
 
 	// Name represents the name of giving interface.
 	Name string
@@ -552,7 +536,8 @@ type Constant struct {
 	// Exported is used to indicate if type is exported or not.
 	Exported bool
 
-	Basic *Base
+	// Basic defines type which holds giving constant.
+	Basic Base
 
 	// Meta provides associated package  and commentary information related to
 	// giving type.
@@ -565,7 +550,7 @@ type Constant struct {
 }
 
 // Resolve takes the list of indexed packages to internal structures
-// to resolve imported or internal types that they reference. This is
+// to resolve imported or internal types that they Pathwayerence. This is
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Constant) Resolve(indexed map[string]*Package) error {
@@ -581,12 +566,8 @@ func (p *Constant) Resolve(indexed map[string]*Package) error {
 // strings, int types, floats, complex, etc, which are
 // atomic indivisible types.
 type Base struct {
-	Ref
+	Pathway
 	Location
-
-	// Path represents the giving full qualified package path name
-	// and type name of type in format: PackagePath.TypeName.
-	Path string
 
 	// Name represents the name of giving type.
 	Name string
@@ -595,7 +576,7 @@ type Base struct {
 	Exported bool
 
 	// Type sets the value object/declared type.
-	Type interface{}
+	Type Identity
 
 	// Meta provides associated package  and commentary information related to
 	// giving type.
@@ -607,8 +588,13 @@ type Base struct {
 	resolver ResolverFn
 }
 
+// ID implements the Identity interface.
+func (p *Base) ID() string {
+	return p.Name
+}
+
 // Resolve takes the list of indexed packages to internal structures
-// to resolve imported or internal types that they reference. This is
+// to resolve imported or internal types that they Pathwayerence. This is
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Base) Resolve(indexed map[string]*Package) error {
@@ -623,13 +609,9 @@ func (p *Base) Resolve(indexed map[string]*Package) error {
 // Type defines a struct holding information about
 // a defined custom type based on an existing type.
 type Type struct {
-	Ref
+	Pathway
 	Location
 	Annotated
-
-	// Path represents the giving full qualified package path name
-	// and type name of type in format: PackagePath.TypeName.
-	Path string
 
 	// Name represents the name of giving interface.
 	Name string
@@ -645,10 +627,11 @@ type Type struct {
 	Meta Meta
 
 	// Type sets the value object/declared type.
-	Type interface{}
+	Type Identity
 
-	// TypeName represents the type name of object type.
-	TypeName string
+	// Methods contains all function defined as methods attached to
+	// type instance.
+	Methods map[string]Function
 
 	// resolver provides a means of the indexer to provide a custom resolving
 	// function which will run internal logic to set giving values
@@ -656,8 +639,13 @@ type Type struct {
 	resolver ResolverFn
 }
 
+// ID implements Identity interface.
+func (p Type) ID() string {
+	return p.Name
+}
+
 // Resolve takes the list of indexed packages to internal structures
-// to resolve imported or internal types that they reference. This is
+// to resolve imported or internal types that they Pathwayerence. This is
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Type) Resolve(indexed map[string]*Package) error {
@@ -672,7 +660,7 @@ func (p *Type) Resolve(indexed map[string]*Package) error {
 // Interface embodies necessary data related to declared
 // interface types within a package.
 type Interface struct {
-	Ref
+	Pathway
 	Location
 	Annotated
 
@@ -704,8 +692,13 @@ type Interface struct {
 	resolver ResolverFn
 }
 
+// ID implements Identity interface.
+func (p Interface) ID() string {
+	return p.Name
+}
+
 // Resolve takes the list of indexed packages to internal structures
-// to resolve imported or internal types that they reference. This is
+// to resolve imported or internal types that they Pathwayerence. This is
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Interface) Resolve(indexed map[string]*Package) error {
@@ -725,13 +718,9 @@ func (p *Interface) Resolve(indexed map[string]*Package) error {
 // Struct embodies necessary data related to declared
 // struct types within a package.
 type Struct struct {
-	Ref
+	Pathway
 	Location
 	Annotated
-
-	// Path represents the giving full qualified package path name
-	// and type name of type in format: PackagePath.TypeName.
-	Path string
 
 	// Name represents the name of giving interface.
 	Name string
@@ -751,8 +740,8 @@ type Struct struct {
 	// as members of struct.
 	Fields map[string]Field
 
-	// Methods contains all method definitions/rules provided
-	// as contract for interface implementors.
+	// Methods contains all function defined as methods attached to
+	// struct instance.
 	Methods map[string]Function
 
 	// Meta provides associated package  and commentary information related to
@@ -765,8 +754,13 @@ type Struct struct {
 	resolver ResolverFn
 }
 
+// ID implements Identity interface.
+func (p Struct) ID() string {
+	return p.Name
+}
+
 // Resolve takes the list of indexed packages to internal structures
-// to resolve imported or internal types that they reference. This is
+// to resolve imported or internal types that they Pathwayerence. This is
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Struct) Resolve(indexed map[string]*Package) error {
@@ -792,7 +786,7 @@ func (p *Struct) Resolve(indexed map[string]*Package) error {
 // package functions, struct methods, interface
 // methods or function closures.
 type Function struct {
-	Ref
+	Pathway
 	Location
 	Annotated
 
@@ -800,10 +794,6 @@ type Function struct {
 	// all statement declared within as it's body and
 	// operation.
 	Body []Expr
-
-	// Path represents the giving full qualified package path name
-	// and type name of type in format: PackagePath.TypeName.
-	Path string
 
 	// Name represents the name of giving interface.
 	Name string
@@ -821,11 +811,7 @@ type Function struct {
 
 	// Owner sets the struct or interface which this function is attached
 	// to has a method.
-	Owner interface{}
-
-	// OwnerName sets the name of the owner if struct or interface which
-	// function is attached to else an empty string.
-	OwnerName string
+	Owner Identity
 
 	// Arguments provides the argument list for giving function.
 	Arguments []Parameter
@@ -843,8 +829,13 @@ type Function struct {
 	resolver ResolverFn
 }
 
+// ID implements Identity interface.
+func (p Function) ID() string {
+	return p.Name
+}
+
 // Resolve takes the list of indexed packages to internal structures
-// to resolve imported or internal types that they reference. This is
+// to resolve imported or internal types that they Pathwayerence. This is
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Function) Resolve(indexed map[string]*Package) error {

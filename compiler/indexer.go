@@ -3,6 +3,7 @@ package compiler
 import (
 	"fmt"
 	"go/ast"
+	"go/token"
 	"go/types"
 	"log"
 	"regexp"
@@ -19,6 +20,7 @@ import (
 	"context"
 
 	"github.com/gokit/astkit/internal/compiler"
+	"github.com/gokit/errors"
 	"golang.org/x/tools/go/loader"
 )
 
@@ -105,6 +107,8 @@ func (indexer *Indexer) indexPackage(ctx context.Context, targetPackage string, 
 	return pkg, indexer.index(ctx, pkg, p)
 }
 
+// index runs logic on a per package basis handling all commentaries, type declarations which
+// which be processed and added into provided package reference.
 func (indexer *Indexer) index(ctx context.Context, pkg *Package, p *loader.PackageInfo) error {
 	in := make(chan interface{}, 0)
 	w, ctx := errgroup.WithContext(ctx)
@@ -164,6 +168,12 @@ func (indexer *Indexer) index(ctx context.Context, pkg *Package, p *loader.Packa
 	return err
 }
 
+// indexImported runs indexing as a fresh package on giving import path, if path is found,
+// then a new indexing is spurned and returns a new Package instance at the end else
+// returning an error. This exists to allow abstracting the indexing process using
+// the import path as target, because of the initial logic for Indexer, as we need
+// to be able to skip already indexed packages or register index packages, more so
+// if a package already has being indexed, it is just returned.
 func (indexer *Indexer) indexImported(ctx context.Context, path string) (*Package, error) {
 	indexer.arw.RLock()
 	if pkg, ok := indexer.indexed[path]; ok {
@@ -189,21 +199,25 @@ func (indexer *Indexer) indexImported(ctx context.Context, path string) (*Packag
 // ParseScope defines a struct which embodies a current parsing scope
 // related to a giving file, package and program.
 type ParseScope struct {
-	From        *Package
-	File        *ast.File
-	Indexer     *Indexer
-	Package     *PackageFile
-	Program     *loader.Program
-	Info        *loader.PackageInfo
-	GenComments map[*ast.CommentGroup]struct{}
+	From     *Package
+	File     *ast.File
+	Indexer  *Indexer
+	Package  *PackageFile
+	Program  *loader.Program
+	Info     *loader.PackageInfo
+	comments map[*ast.CommentGroup]struct{}
 }
 
 // Parse runs through all non-comment based declarations within the
 // giving file.
 func (b *ParseScope) Parse(ctx context.Context, in chan interface{}) error {
-	if err := b.handleImports(ctx, in); err != nil {
-		return err
+	if b.comments == nil {
+		b.comments = map[*ast.CommentGroup]struct{}{}
 	}
+
+	//if err := b.handleImports(ctx, in); err != nil {
+	//	return err
+	//}
 
 	// Parse all structures first, ensuring to add them into package.
 	for _, declr := range b.File.Decls {
@@ -293,7 +307,7 @@ func (b *ParseScope) handleImports(ctx context.Context, in chan interface{}) err
 		var imp Import
 
 		if dependency.Doc != nil {
-			b.GenComments[dependency.Doc] = struct{}{}
+			b.comments[dependency.Doc] = struct{}{}
 
 			doc, err := b.handleCommentGroup(dependency.Doc)
 			if err != nil {
@@ -303,7 +317,7 @@ func (b *ParseScope) handleImports(ctx context.Context, in chan interface{}) err
 		}
 
 		if dependency.Comment != nil {
-			b.GenComments[dependency.Comment] = struct{}{}
+			b.comments[dependency.Comment] = struct{}{}
 			doc, err := b.handleCommentGroup(dependency.Comment)
 			if err != nil {
 				return err
@@ -353,7 +367,7 @@ func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, res chan interface{}) 
 	declr.Name = fn.Name.Name
 
 	if fn.Doc != nil {
-		b.GenComments[fn.Doc] = struct{}{}
+		b.comments[fn.Doc] = struct{}{}
 		doc, err := b.handleCommentGroup(fn.Doc)
 		if err != nil {
 			return err
@@ -362,34 +376,30 @@ func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, res chan interface{}) 
 		declr.Meta.Doc = doc
 	}
 
-	// Set the line details of giving commentary.
-	srcd, length, begin, end := compiler.ReadSourceIfPossible(b.Program.Fset, fn.Pos(), fn.End())
-	declr.File = begin.Filename
-	declr.Source = string(srcd)
-	declr.Begin = begin.Offset
-	declr.End = end.Offset
-	declr.Length = length
-	declr.Line = begin.Line
-	declr.LineEnd = end.Line
-	declr.Column = begin.Column
-	declr.ColumnEnd = end.Column
+	// read location information(line, column, source text etc) for giving type.
+	declr.Location = b.getLocation(fn.Pos(), fn.End())
 
 	obj := b.Info.ObjectOf(fn.Name)
 	declr.Exported = obj.Exported()
 	declr.Meta.Name = obj.Pkg().Name()
 	declr.Meta.Path = obj.Pkg().Path()
-	declr.Path = strings.Join([]string{obj.Pkg().Path(), fn.Name.Name}, ".")
+
+	if fn.Recv == nil {
+		declr.Path = strings.Join([]string{obj.Pkg().Path(), fn.Name.Name}, ".")
+	} else {
+		declr.Path = strings.Join([]string{obj.Pkg().Path(), fn.Recv.List[0].Names[0].Name, fn.Name.Name}, ".")
+	}
 
 	var err error
 	if fn.Type.Params != nil {
-		declr.Arguments, err = b.handleParameterList(fn.Type.Params)
+		declr.Arguments, err = b.handleParameterList(fn.Name.Name, fn.Type.Params)
 		if err != nil {
 			return err
 		}
 	}
 
 	if fn.Type.Results != nil {
-		declr.Returns, err = b.handleParameterList(fn.Type.Results)
+		declr.Returns, err = b.handleParameterList(fn.Name.Name, fn.Type.Results)
 		if err != nil {
 			return err
 		}
@@ -400,68 +410,35 @@ func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, res chan interface{}) 
 		return nil
 	}
 
-	res <- &declr
-	return nil
-}
-
-func (b *ParseScope) handleFieldWithName(f *ast.Field, nm *ast.Ident, t ast.Expr) (Field, error) {
-	var p Field
-	p.Name = nm.Name
-
-	if f.Doc != nil {
-		b.GenComments[f.Doc] = struct{}{}
-		if doc, err := b.handleCommentGroup(f.Doc); err != nil {
-			p.Docs = append(p.Docs, doc)
-		}
+	if len(fn.Recv.List) == 0 {
+		res <- &declr
+		return nil
 	}
 
-	if f.Comment != nil {
-		b.GenComments[f.Comment] = struct{}{}
-		if doc, err := b.handleCommentGroup(f.Comment); err != nil {
-			p.Docs = append(p.Docs, doc)
-		}
-	}
+	fnAddr := &declr
+	owner := fn.Recv.List[0]
 
-	obj := b.Info.ObjectOf(fn.Name)
-	p.Exported = obj.Exported()
-	p.Meta.Name = obj.Pkg().Name()
-	p.Meta.Path = obj.Pkg().Path()
-	p.Path = strings.Join([]string{obj.Pkg().Path(), fn.Name.Name}, ".")
-
-	// Set the line details of giving commentary.
-	srcd, length, begin, end := compiler.ReadSourceIfPossible(b.Program.Fset, f.Pos(), f.End())
-	p.File = begin.Filename
-	p.Source = string(srcd)
-	p.Begin = begin.Offset
-	p.End = end.Offset
-	p.Length = length
-	p.Line = begin.Line
-	p.LineEnd = end.Line
-	p.Column = begin.Column
-	p.ColumnEnd = end.Column
-
-	pAddr := &p
-
-	p.resolver = func(packages map[string]*Package) error {
-		tl, tlname, meta, err := GetExprType(b, f, t, packages)
+	declr.resolver = func(others map[string]*Package) error {
+		ownerType, meta, err := GetExprType(b, owner, owner.Type, others)
 		if err != nil {
 			return err
 		}
 
-		pAddr.Type = tl
-		pAddr.Meta = meta
-		pAddr.TypeName = tlname
+		fnAddr.Meta = meta
+		fnAddr.Owner = ownerType
+		fnAddr.IsMethod = true
 		return nil
 	}
 
-	return p, nil
+	res <- &declr
+	return nil
 }
 
-func (b *ParseScope) handleFieldList(set *ast.FieldList) ([]Field, error) {
+func (b *ParseScope) handleFieldList(ownerName string, set *ast.FieldList) ([]Field, error) {
 	var params []Field
 	for _, param := range set.List {
 		if len(param.Names) == 0 {
-			p, err := b.handleField(param, param.Type)
+			p, err := b.handleField(ownerName, param, param.Type)
 			if err != nil {
 				return params, err
 			}
@@ -473,7 +450,7 @@ func (b *ParseScope) handleFieldList(set *ast.FieldList) ([]Field, error) {
 		// If we have name as a named Field or named return then
 		// appropriately
 		for _, name := range param.Names {
-			p, err := b.handleFieldWithName(param, name, param.Type)
+			p, err := b.handleFieldWithName(ownerName, param, name, param.Type)
 			if err != nil {
 				return params, err
 			}
@@ -484,11 +461,11 @@ func (b *ParseScope) handleFieldList(set *ast.FieldList) ([]Field, error) {
 	return params, nil
 }
 
-func (b *ParseScope) handleParameterList(set *ast.FieldList) ([]Parameter, error) {
+func (b *ParseScope) handleParameterList(fnName string, set *ast.FieldList) ([]Parameter, error) {
 	var params []Parameter
 	for _, param := range set.List {
 		if len(param.Names) == 0 {
-			p, err := b.handleParameter(param, param.Type)
+			p, err := b.handleParameter(fnName, param, param.Type)
 			if err != nil {
 				return params, err
 			}
@@ -500,7 +477,7 @@ func (b *ParseScope) handleParameterList(set *ast.FieldList) ([]Parameter, error
 		// If we have name as a named parameter or named return then
 		// appropriately
 		for _, name := range param.Names {
-			p, err := b.handleParameterWithName(param, name, param.Type)
+			p, err := b.handleParameterWithName(fnName, param, name, param.Type)
 			if err != nil {
 				return params, err
 			}
@@ -511,169 +488,188 @@ func (b *ParseScope) handleParameterList(set *ast.FieldList) ([]Parameter, error
 	return params, nil
 }
 
-func (b *ParseScope) handleField(f *ast.Field, t ast.Expr) (Field, error) {
+func (b *ParseScope) handleField(ownerName string, f *ast.Field, t ast.Expr) (Field, error) {
 	var p Field
 
+	if f.Tag != nil {
+		p.Tags = GetTags(f.Tag.Value)
+	}
+
+	// read location information(line, column, source text etc) for giving type.
+	p.Location = b.getLocation(f.Pos(), f.End())
+
 	if f.Doc != nil {
-		b.GenComments[f.Doc] = struct{}{}
+		b.comments[f.Doc] = struct{}{}
 		if doc, err := b.handleCommentGroup(f.Doc); err != nil {
 			p.Docs = append(p.Docs, doc)
 		}
 	}
 
 	if f.Comment != nil {
-		b.GenComments[f.Comment] = struct{}{}
+		b.comments[f.Comment] = struct{}{}
 		if doc, err := b.handleCommentGroup(f.Comment); err != nil {
 			p.Docs = append(p.Docs, doc)
 		}
 	}
 
-	// Set the line details of giving commentary.
-	srcd, length, begin, end := compiler.ReadSourceIfPossible(b.Program.Fset, f.Pos(), f.End())
-	p.File = begin.Filename
-	p.Source = string(srcd)
-	p.Begin = begin.Offset
-	p.End = end.Offset
-	p.Length = length
-	p.Line = begin.Line
-	p.LineEnd = end.Line
-	p.Column = begin.Column
-	p.ColumnEnd = end.Column
-
 	pAddr := &p
-
 	p.resolver = func(packages map[string]*Package) error {
-		tl, tlname, meta, err := GetExprType(b, f, t, packages)
+		tl, meta, err := GetExprType(b, f, t, packages)
 		if err != nil {
 			return err
 		}
 
 		pAddr.Type = tl
 		pAddr.Meta = meta
-		pAddr.TypeName = tlname
 		return nil
 	}
 
 	return p, nil
 }
 
-func (b *ParseScope) handleParameterWithName(f *ast.Field, nm *ast.Ident, t ast.Expr) (Parameter, error) {
+func (b *ParseScope) handleFieldWithName(ownerName string, f *ast.Field, nm *ast.Ident, t ast.Expr) (Field, error) {
+	var p Field
+	p.Name = nm.Name
+
+	if f.Tag != nil {
+		p.Tags = GetTags(f.Tag.Value)
+	}
+
+	if f.Doc != nil {
+		b.comments[f.Doc] = struct{}{}
+		if doc, err := b.handleCommentGroup(f.Doc); err != nil {
+			p.Docs = append(p.Docs, doc)
+		}
+	}
+
+	if f.Comment != nil {
+		b.comments[f.Comment] = struct{}{}
+		if doc, err := b.handleCommentGroup(f.Comment); err != nil {
+			p.Docs = append(p.Docs, doc)
+		}
+	}
+
+	obj := b.Info.ObjectOf(nm)
+	p.Exported = obj.Exported()
+	p.Path = strings.Join([]string{obj.Pkg().Path(), ownerName, nm.Name}, ".")
+
+	// read location information(line, column, source text etc) for giving type.
+	p.Location = b.getLocation(f.Pos(), f.End())
+
+	pAddr := &p
+
+	p.resolver = func(packages map[string]*Package) error {
+		tl, meta, err := GetExprType(b, f, t, packages)
+		if err != nil {
+			return err
+		}
+
+		pAddr.Type = tl
+		pAddr.Meta = meta
+		return nil
+	}
+
+	return p, nil
+}
+
+func (b *ParseScope) handleParameter(fnName string, f *ast.Field, t ast.Expr) (Parameter, error) {
+	var p Parameter
+
+	if f.Doc != nil {
+		b.comments[f.Doc] = struct{}{}
+		if doc, err := b.handleCommentGroup(f.Doc); err != nil {
+			p.Docs = append(p.Docs, doc)
+		}
+	}
+
+	if f.Comment != nil {
+		b.comments[f.Comment] = struct{}{}
+		if doc, err := b.handleCommentGroup(f.Comment); err != nil {
+			p.Docs = append(p.Docs, doc)
+		}
+	}
+
+	// read location information(line, column, source text etc) for giving type.
+	p.Location = b.getLocation(f.Pos(), f.End())
+
+	pAddr := &p
+	if elip, ok := t.(*ast.Ellipsis); ok {
+		p.IsVariadic = true
+		p.resolver = func(packages map[string]*Package) error {
+			tl, meta, err := GetExprType(b, f, elip.Elt, packages)
+			if err != nil {
+				return err
+			}
+
+			pAddr.Type = tl
+			pAddr.Meta = meta
+			return nil
+		}
+		return p, nil
+	}
+
+	p.resolver = func(packages map[string]*Package) error {
+		tl, meta, err := GetExprType(b, f, t, packages)
+		if err != nil {
+			return err
+		}
+
+		pAddr.Type = tl
+		pAddr.Meta = meta
+		return nil
+	}
+
+	return p, nil
+}
+
+func (b *ParseScope) handleParameterWithName(fnName string, f *ast.Field, nm *ast.Ident, t ast.Expr) (Parameter, error) {
 	var p Parameter
 	p.Name = nm.Name
 
+	// read location information(line, column, source text etc) for giving type.
+	p.Location = b.getLocation(f.Pos(), f.End())
+
 	if f.Doc != nil {
-		b.GenComments[f.Doc] = struct{}{}
+		b.comments[f.Doc] = struct{}{}
 		if doc, err := b.handleCommentGroup(f.Doc); err != nil {
 			p.Docs = append(p.Docs, doc)
 		}
 	}
 
 	if f.Comment != nil {
-		b.GenComments[f.Comment] = struct{}{}
+		b.comments[f.Comment] = struct{}{}
 		if doc, err := b.handleCommentGroup(f.Comment); err != nil {
 			p.Docs = append(p.Docs, doc)
 		}
 	}
 
-	// Set the line details of giving commentary.
-	srcd, length, begin, end := compiler.ReadSourceIfPossible(b.Program.Fset, f.Pos(), f.End())
-	p.File = begin.Filename
-	p.Source = string(srcd)
-	p.Begin = begin.Offset
-	p.End = end.Offset
-	p.Length = length
-	p.Line = begin.Line
-	p.LineEnd = end.Line
-	p.Column = begin.Column
-	p.ColumnEnd = end.Column
+	obj := b.Info.ObjectOf(nm)
+	p.Path = strings.Join([]string{obj.Pkg().Path(), fnName, nm.Name}, ".")
 
 	pAddr := &p
 	if elip, ok := t.(*ast.Ellipsis); ok {
 		p.IsVariadic = true
 		p.resolver = func(packages map[string]*Package) error {
-			tl, tlname, meta, err := GetExprType(b, f, elip.Elt, packages)
+			tl, meta, err := GetExprType(b, f, elip.Elt, packages)
 			if err != nil {
 				return err
 			}
 
 			pAddr.Type = tl
 			pAddr.Meta = meta
-			pAddr.TypeName = tlname
 			return nil
 		}
 		return p, nil
 	}
 
 	p.resolver = func(packages map[string]*Package) error {
-		tl, tlname, meta, err := GetExprType(b, f, t, packages)
+		tl, meta, err := GetExprType(b, f, t, packages)
 		if err != nil {
 			return err
 		}
 
 		pAddr.Type = tl
 		pAddr.Meta = meta
-		pAddr.TypeName = tlname
-		return nil
-	}
-
-	return p, nil
-}
-
-func (b *ParseScope) handleParameter(f *ast.Field, t ast.Expr) (Parameter, error) {
-	var p Parameter
-
-	if f.Doc != nil {
-		b.GenComments[f.Doc] = struct{}{}
-		if doc, err := b.handleCommentGroup(f.Doc); err != nil {
-			p.Docs = append(p.Docs, doc)
-		}
-	}
-
-	if f.Comment != nil {
-		b.GenComments[f.Comment] = struct{}{}
-		if doc, err := b.handleCommentGroup(f.Comment); err != nil {
-			p.Docs = append(p.Docs, doc)
-		}
-	}
-
-	// Set the line details of giving commentary.
-	srcd, length, begin, end := compiler.ReadSourceIfPossible(b.Program.Fset, f.Pos(), f.End())
-	p.File = begin.Filename
-	p.Source = string(srcd)
-	p.Begin = begin.Offset
-	p.End = end.Offset
-	p.Length = length
-	p.Line = begin.Line
-	p.LineEnd = end.Line
-	p.Column = begin.Column
-	p.ColumnEnd = end.Column
-
-	pAddr := &p
-	if elip, ok := t.(*ast.Ellipsis); ok {
-		p.IsVariadic = true
-		p.resolver = func(packages map[string]*Package) error {
-			tl, tlname, meta, err := GetExprType(b, f, elip.Elt, packages)
-			if err != nil {
-				return err
-			}
-
-			pAddr.Type = tl
-			pAddr.Meta = meta
-			pAddr.TypeName = tlname
-			return nil
-		}
-		return p, nil
-	}
-
-	p.resolver = func(packages map[string]*Package) error {
-		tl, tlname, meta, err := GetExprType(b, f, t, packages)
-		if err != nil {
-			return err
-		}
-
-		pAddr.Type = tl
-		pAddr.Meta = meta
-		pAddr.TypeName = tlname
 		return nil
 	}
 
@@ -682,7 +678,7 @@ func (b *ParseScope) handleParameter(f *ast.Field, t ast.Expr) (Parameter, error
 
 func (b *ParseScope) handleCommentaries() error {
 	for _, cdoc := range b.File.Comments {
-		if _, ok := b.GenComments[cdoc]; ok {
+		if _, ok := b.comments[cdoc]; ok {
 			continue
 		}
 
@@ -742,31 +738,70 @@ func (b *ParseScope) handleDocText(c *ast.Comment) DocText {
 	return doc
 }
 
+func (b *ParseScope) getLocation(beginPos token.Pos, endPos token.Pos) Location {
+	srcd, length, begin, end := compiler.ReadSourceIfPossible(b.Program.Fset, beginPos, endPos)
+
+	var loc Location
+	loc.Source = string(srcd)
+	loc.File = begin.Filename
+	loc.Begin = begin.Offset
+	loc.End = end.Offset
+	loc.Length = length
+	loc.Line = begin.Line
+	loc.LineEnd = end.Line
+	loc.Column = begin.Column
+	loc.ColumnEnd = end.Column
+	return loc
+}
+
+func (b *ParseScope) getImport(aliasName string) (Import, error) {
+	if imp, ok := b.Package.Imports[aliasName]; ok {
+		return imp, nil
+	}
+	return Import{}, errors.Wrap(ErrNotFound, "import path with alias %q not found", aliasName)
+}
+
 //******************************************************************************
 //  Utilities
 //******************************************************************************
 
+var (
+	varSignatureRegExp = regexp.MustCompile(`var\s([a-zA-Z0-9_]+)\s([a-zA-Z0-9_\.\/\$]+)`)
+)
+
+type varSignature struct {
+	Name    string
+	Package string
+}
+
+func getVarSignature(m string) (varSignature, error) {
+	var sig varSignature
+	parts := varSignatureRegExp.FindAllString(m, -1)
+	if len(parts) < 3 {
+		return sig, errors.New("no signature or invalid signature found: %q", m)
+	}
+	sig.Name = parts[1]
+	sig.Package = parts[2]
+	return sig, nil
+}
+
 // GetExprType returns the associated type of a giving ast.Expr by tracking the package and type that it
 // is declared as.
-func GetExprType(base *ParseScope, f *ast.Field, expr ast.Expr, others map[string]*Package) (interface{}, string, Meta, error) {
-	var meta Meta
+func GetExprType(base *ParseScope, f *ast.Field, expr ast.Expr, others map[string]*Package) (Identity, Meta, error) {
+	if len(f.Names) != 0 {
+		if obj := base.Info.ObjectOf(f.Names[0]); obj != nil {
+			return GetTypeFromObject(base, obj, f, expr, others)
+		}
+	}
 
+	var meta Meta
 	switch t := expr.(type) {
 	case *ast.Ident:
-		if obj := base.Info.ObjectOf(t); obj != nil {
-
-		}
-
-		return &Base{
-			Name:     t.Name,
-			Exported: t.IsExported(),
-		}, t.Name, meta, nil
-
 	case *ast.BasicLit:
 		return &Base{
 			Name:     t.Value,
 			Exported: true,
-		}, t.Value, meta, nil
+		}, meta, nil
 	case *ast.StarExpr:
 	case *ast.UnaryExpr:
 	case *ast.SelectorExpr:
@@ -782,11 +817,17 @@ func GetExprType(base *ParseScope, f *ast.Field, expr ast.Expr, others map[strin
 	case *ast.InterfaceType:
 	}
 
-	return nil, "", meta, nil
+	return nil, meta, nil
 }
 
-// GetTyepFromSet attempts to return a concrete Expr object which implements interface from types.Object provided.
-func GetTypeFromSet(base *ParseScope, others map[string]*Package, obj types.Object) (Expr, error) {
+// GetTypeFromObject returns giving Object type information from provided types.Object retrieved from underlying field name.
+func GetTypeFromObject(base *ParseScope, obj types.Object, f *ast.Field, expr ast.Expr, others map[string]*Package) (Identity, Meta, error) {
+	var meta Meta
+	return nil, meta, nil
+}
+
+// GetTypeFromSet attempts to return a concrete Expr object which implements interface from types.Object provided.
+func GetTypeFromSet(base *ParseScope, others map[string]*Package, obj types.Object) (Identity, error) {
 	//targetPkg, ok := others[obj.Pkg().Path()]
 	//if !ok {
 	//	return nil, errors.New("not found")

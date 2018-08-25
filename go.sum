@@ -1,0 +1,8 @@
+github.com/gokit/errors v0.0.0-20180722071056-f3491799719a h1:AsdGXNlfPAXRhXEWRw+ZmOBgMv4pT6MiKXQW4WOnyn8=
+github.com/gokit/errors v0.0.0-20180722071056-f3491799719a/go.mod h1:ipykB/QrFXRTDj7gnqpIPJGoH8TN0FRQqAuKUUOZg9E=
+golang.org/x/net v0.0.0-20180824152047-4bcd98cce591 h1:4S2XUgvg3hUNTvxI307qkFPb9zKHG3Nf9TXFzX/DZZI=
+golang.org/x/net v0.0.0-20180824152047-4bcd98cce591/go.mod h1:mL1N/T3taQHkDXs73rZJwtUhF3w3ftmwwsq0BUmARs4=
+golang.org/x/sync v0.0.0-20180314180146-1d60e4601c6f h1:wMNYb4v58l5UBM7MYRLPG6ZhfOqbKu7X5eyFl8ZhKvA=
+golang.org/x/sync v0.0.0-20180314180146-1d60e4601c6f/go.mod h1:RxMgew5VJxzue5/jJTE5uejpjVlOe/izrB70Jof72aM=
+golang.org/x/tools v0.0.0-20180824175216-6c1c5e93cdc1 h1:EAPsk8kfGCjxQagrkWjzXlUWe2p3gj5MknO+z2o9GKc=
+golang.org/x/tools v0.0.0-20180824175216-6c1c5e93cdc1/go.mod h1:n7NCudcB/nEzxVGmLbDWY5pfWTLqBcC2KZ6jyYvM4mQ=

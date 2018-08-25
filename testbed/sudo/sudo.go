@@ -3,7 +3,10 @@ package sudo
 import (
 	"fmt"
 	"go/ast"
+	tokens "go/token"
 	"go/types"
+
+	"github.com/gokit/astkit/testbed/sudo/api"
 )
 
 // variables
@@ -12,7 +15,33 @@ var (
 	Name  string
 	Creed int = 10
 	Fall      = 1000
+
+	wilto = []map[string]tokens.Pos{}
+	Willt = map[string]interface{}{}
 )
+
+type ListOfWiks []api.Rx
+
+type Lists []interface{}
+
+type Rizz map[string]int
+
+type Wilo chan struct{}
+
+type Wiko chan chan []string
+
+type Wiko2 chan func() []string
+
+type Fna func(string) (int, error)
+
+func Bang(m string, p api.Rx) {
+	fmt.Printf("Map : %s : %d", m, p)
+}
+
+func Hello(n string, pos tokens.Pos, v api.Wilk) {
+	bu := map[string]string{"sasd": n}
+	fmt.Printf("Map : %s : %d", bu, pos)
+}
 
 type Function struct {
 	id        string
@@ -34,11 +63,6 @@ type Function struct {
 func (f Function) hello(n string, v, u string, m int) {
 	bu := []string{"sasd", n}
 	fmt.Printf("List : %s", bu)
-}
-
-func Hello(n string) {
-	bu := map[string]string{"sasd": n}
-	fmt.Printf("Map : %s", bu)
 }
 
 // Functioner interface
