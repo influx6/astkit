@@ -550,6 +550,15 @@ func (b *ParseScope) handleInterface(ctx context.Context, str *ast.InterfaceType
 		}
 	}
 
+	declr.resolver = func(others map[string]*Package) error {
+		for _, resolver := range resolvers {
+			if err := resolver(others); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	in <- declr
 	return nil
 }
