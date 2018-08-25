@@ -9,8 +9,58 @@ import (
 	"github.com/gokit/astkit/testbed/sudo/api"
 )
 
+const roook = "Roock"
+
+const (
+	vood = "wicket"
+	day  = 230
+)
+
+var _ string = "Rico"
+
+var ui int = 300
+
+var fu = func(string) {}
+
 // variables
 var (
+	_ string = "Ricall"
+
+	_ = "Render"
+
+	one, two, three, four = 1, 2, 3, 4
+
+	one2, two2, three2, four2 int64 = 1, 2, 3, 4
+
+	twethen string = "Wikkileaks"
+
+	vikvi = make(chan struct{}, 0)
+
+	nik = func() {}
+
+	riz = map[string]string{}
+
+	riz2 map[string]string = map[string]string{
+		"day":    "tuesday",
+		"second": "10",
+	}
+
+	friz = []string{"one", "two", "four"}
+
+	kul = []struct {
+		Name string
+		Age  int
+	}{
+		{
+			"Rix",
+			20,
+		},
+		{
+			"Thery",
+			20,
+		},
+	}
+
 	// Name applies here
 	Name  string
 	Creed int = 10
@@ -73,6 +123,19 @@ type Functioner interface {
 	Rewrite(string, int)
 	Params(v string) []string
 	Results() []FunctionResult
+}
+
+type FullFn interface {
+	Functioner
+
+	Crib() int
+}
+
+type FunctionReco struct {
+	FunctionResult
+	Functioner
+	Field string
+	Day   int
 }
 
 type FunctionResult struct {

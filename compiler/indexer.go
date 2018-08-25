@@ -7,9 +7,8 @@ import (
 	"go/types"
 	"log"
 	"regexp"
-	"strings"
-
 	"strconv"
+	"strings"
 
 	"sync"
 
@@ -27,6 +26,10 @@ import (
 // errors
 const (
 	ErrNotFound = Error("target not found")
+)
+
+const (
+	blankIdentifier = "_"
 )
 
 // Indexer implements a golang ast index which parses
@@ -94,7 +97,9 @@ func (indexer *Indexer) indexPackage(ctx context.Context, targetPackage string, 
 		Types:      map[string]*Type{},
 		Structs:    map[string]*Struct{},
 		Depends:    map[string]*Package{},
+		Variables:  map[string]*Variable{},
 		Functions:  map[string]*Function{},
+		Methods:    map[string]*Function{},
 		Interfaces: map[string]*Interface{},
 		Files:      map[string]*PackageFile{},
 	}
@@ -233,7 +238,9 @@ func (b *ParseScope) Parse(ctx context.Context, in chan interface{}) error {
 				}
 			}
 		case *ast.BadDecl:
-			// Do nothing...
+			var bad BadExpr
+			bad.Location = b.getLocation(elem.Pos(), elem.End())
+			in <- bad
 		}
 	}
 
@@ -248,7 +255,7 @@ func (b *ParseScope) Parse(ctx context.Context, in chan interface{}) error {
 func (b *ParseScope) handleDeclarations(ctx context.Context, spec ast.Spec, gen *ast.GenDecl, in chan interface{}) error {
 	switch obj := spec.(type) {
 	case *ast.ValueSpec:
-		if err := b.handleVariable(ctx, obj, spec, gen, in); err != nil {
+		if err := b.handleVariables(ctx, obj, spec, gen, in); err != nil {
 			return err
 		}
 	case *ast.TypeSpec:
@@ -272,39 +279,22 @@ func (b *ParseScope) handleDeclarations(ctx context.Context, spec ast.Spec, gen 
 	return nil
 }
 
-func (b *ParseScope) handleVariable(ctx context.Context, val *ast.ValueSpec, spec ast.Spec, gen *ast.GenDecl, in chan interface{}) error {
-	return nil
-}
-
-func (b *ParseScope) handleStruct(ctx context.Context, str *ast.StructType, ty *ast.TypeSpec, spec ast.Spec, gen *ast.GenDecl, res chan interface{}) error {
-
-	return nil
-}
-
-func (b *ParseScope) handleInterface(ctx context.Context, str *ast.InterfaceType, ty *ast.TypeSpec, spec ast.Spec, gen *ast.GenDecl, res chan interface{}) error {
-
-	return nil
-}
-
-func (b *ParseScope) handleNamedType(ctx context.Context, ty *ast.TypeSpec, spec ast.Spec, gen *ast.GenDecl, res chan interface{}) error {
-
-	return nil
-}
-
 func (b *ParseScope) handleImports(ctx context.Context, in chan interface{}) error {
 	if b.Package.Imports == nil {
 		b.Package.Imports = map[string]Import{}
 	}
 
 	for _, dependency := range b.File.Imports {
-		source, length, begin, end := compiler.ReadSourceIfPossible(b.Program.Fset, dependency.Pos(), dependency.End())
-
 		value := dependency.Path.Value
 		if unquoted, err := strconv.Unquote(value); err == nil {
 			value = unquoted
 		}
 
 		var imp Import
+		imp.Path = value
+
+		// read location information(line, column, source text etc) for giving type.
+		imp.Location = b.getLocation(dependency.Pos(), dependency.End())
 
 		if dependency.Doc != nil {
 			b.comments[dependency.Doc] = struct{}{}
@@ -324,17 +314,6 @@ func (b *ParseScope) handleImports(ctx context.Context, in chan interface{}) err
 			}
 			imp.Docs = append(imp.Docs, doc)
 		}
-
-		imp.Path = value
-		imp.File = begin.Filename
-		imp.Begin = begin.Offset
-		imp.Source = string(source)
-		imp.End = end.Offset
-		imp.Length = length
-		imp.Line = begin.Line
-		imp.LineEnd = end.Line
-		imp.Column = begin.Column
-		imp.ColumnEnd = end.Column
 
 		// If it has an alias then set alias to name value.
 		if dependency.Name != nil {
@@ -362,7 +341,227 @@ func (b *ParseScope) handleImports(ctx context.Context, in chan interface{}) err
 	return nil
 }
 
-func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, res chan interface{}) error {
+func (b *ParseScope) handleVariables(ctx context.Context, val *ast.ValueSpec, spec ast.Spec, gen *ast.GenDecl, in chan interface{}) error {
+	for index, named := range val.Names {
+		if err := b.handleVariable(ctx, index, named, val, spec, gen, in); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *ParseScope) handleVariable(ctx context.Context, index int, named *ast.Ident, val *ast.ValueSpec, spec ast.Spec, gen *ast.GenDecl, in chan interface{}) error {
+	var declr Variable
+	declr.Name = named.Name
+
+	if named.Name == blankIdentifier {
+		declr.Blank = true
+	}
+
+	// read location information(line, column, source text etc) for giving type.
+	if len(val.Names) > 1 {
+		declr.Location = b.getLocation(named.Pos(), named.End())
+	} else {
+		declr.Location = b.getLocation(val.Pos(), val.End())
+	}
+
+	if val.Doc != nil {
+		b.comments[val.Doc] = struct{}{}
+		doc, err := b.handleCommentGroup(val.Doc)
+		if err != nil {
+			return err
+		}
+
+		declr.Doc = doc
+	}
+
+	obj := b.Info.ObjectOf(named)
+	declr.Exported = obj.Exported()
+	declr.Meta.Name = obj.Pkg().Name()
+	declr.Meta.Path = obj.Pkg().Path()
+	declr.Path = strings.Join([]string{obj.Pkg().Path(), named.Name}, ".")
+
+	declrAddr := &declr
+	declr.resolver = func(others map[string]*Package) error {
+		vType, meta, err := GetValType(b, named, val, others)
+		if err != nil {
+			return err
+		}
+
+		declrAddr.Meta = meta
+		declrAddr.Type = vType
+		return nil
+	}
+
+	in <- &declr
+	return nil
+}
+
+func (b *ParseScope) handleStruct(ctx context.Context, str *ast.StructType, ty *ast.TypeSpec, spec ast.Spec, gen *ast.GenDecl, in chan interface{}) error {
+	var declr Struct
+
+	var structName string
+	if ty.Name != nil {
+		structName = ty.Name.Name
+	} else {
+		structName = "struct"
+	}
+
+	declr.Name = structName
+	declr.Fields = map[string]Field{}
+	declr.Embeds = map[string]*Struct{}
+	declr.Composes = map[string]*Interface{}
+	declr.Location = b.getLocation(spec.Pos(), spec.End())
+
+	if gen.Doc != nil {
+		b.comments[gen.Doc] = struct{}{}
+		doc, err := b.handleCommentGroup(gen.Doc)
+		if err != nil {
+			return err
+		}
+
+		declr.Doc = doc
+	}
+
+	if ty.Doc != nil {
+		b.comments[ty.Doc] = struct{}{}
+		doc, err := b.handleCommentGroup(ty.Doc)
+		if err != nil {
+			return err
+		}
+
+		declr.Docs = append(declr.Docs, doc)
+	}
+
+	if ty.Comment != nil {
+		b.comments[ty.Comment] = struct{}{}
+		doc, err := b.handleCommentGroup(ty.Comment)
+		if err != nil {
+			return err
+		}
+
+		declr.Docs = append(declr.Docs, doc)
+	}
+
+	obj := b.Info.ObjectOf(ty.Name)
+	declr.Exported = obj.Exported()
+	declr.Meta.Name = obj.Pkg().Name()
+	declr.Meta.Path = obj.Pkg().Path()
+	declr.Path = strings.Join([]string{obj.Pkg().Path(), structName}, ".")
+
+	var resolvers []ResolverFn
+
+	for _, field := range str.Fields.List {
+		if len(field.Names) == 0 {
+			field, err := b.handleField(structName, field, field.Type)
+			if err != nil {
+				return err
+			}
+			declr.Fields[field.Name] = field
+			continue
+		}
+
+		for _, name := range field.Names {
+			field, err := b.handleFieldWithName(structName, field, name, field.Type)
+			if err != nil {
+				return err
+			}
+			declr.Fields[field.Name] = field
+		}
+	}
+
+	declr.resolver = func(others map[string]*Package) error {
+		for _, resolver := range resolvers {
+			if err := resolver(others); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	in <- declr
+	return nil
+}
+
+func (b *ParseScope) handleInterface(ctx context.Context, str *ast.InterfaceType, ty *ast.TypeSpec, spec ast.Spec, gen *ast.GenDecl, in chan interface{}) error {
+	var declr Interface
+	declr.Name = ty.Name.Name
+
+	declr.Methods = map[string]Function{}
+	declr.Composes = map[string]*Interface{}
+	declr.Location = b.getLocation(spec.Pos(), spec.End())
+
+	if gen.Doc != nil {
+		b.comments[gen.Doc] = struct{}{}
+		doc, err := b.handleCommentGroup(gen.Doc)
+		if err != nil {
+			return err
+		}
+
+		declr.Doc = doc
+	}
+
+	if ty.Doc != nil {
+		b.comments[ty.Doc] = struct{}{}
+		doc, err := b.handleCommentGroup(ty.Doc)
+		if err != nil {
+			return err
+		}
+
+		declr.Docs = append(declr.Docs, doc)
+	}
+
+	if ty.Comment != nil {
+		b.comments[ty.Comment] = struct{}{}
+		doc, err := b.handleCommentGroup(ty.Comment)
+		if err != nil {
+			return err
+		}
+
+		declr.Docs = append(declr.Docs, doc)
+	}
+
+	obj := b.Info.ObjectOf(ty.Name)
+	declr.Exported = obj.Exported()
+	declr.Meta.Name = obj.Pkg().Name()
+	declr.Meta.Path = obj.Pkg().Path()
+	declr.Path = strings.Join([]string{obj.Pkg().Path(), ty.Name.Name}, ".")
+
+	var resolvers []ResolverFn
+
+	for _, field := range str.Methods.List {
+		fmt.Printf("Interface %q -> %#v\n", ty.Name.Name, field)
+
+		if len(field.Names) == 0 {
+			field, err := b.handleFunctionField(ty.Name.Name, field, field.Type)
+			if err != nil {
+				return err
+			}
+			declr.Methods[field.Name] = field
+			continue
+		}
+
+		for _, name := range field.Names {
+			field, err := b.handleFunctionFieldWithName(ty.Name.Name, field, name, field.Type)
+			if err != nil {
+				return err
+			}
+			declr.Methods[field.Name] = field
+		}
+	}
+
+	in <- declr
+	return nil
+}
+
+func (b *ParseScope) handleNamedType(ctx context.Context, ty *ast.TypeSpec, spec ast.Spec, gen *ast.GenDecl, in chan interface{}) error {
+	var declr Type
+
+	in <- declr
+	return nil
+}
+
+func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, in chan interface{}) error {
 	var declr Function
 	declr.Name = fn.Name.Name
 
@@ -373,7 +572,7 @@ func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, res chan interface{}) 
 			return err
 		}
 
-		declr.Meta.Doc = doc
+		declr.Doc = doc
 	}
 
 	// read location information(line, column, source text etc) for giving type.
@@ -406,12 +605,12 @@ func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, res chan interface{}) 
 	}
 
 	if fn.Recv == nil {
-		res <- &declr
+		in <- declr
 		return nil
 	}
 
 	if len(fn.Recv.List) == 0 {
-		res <- &declr
+		in <- &declr
 		return nil
 	}
 
@@ -424,14 +623,86 @@ func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, res chan interface{}) 
 			return err
 		}
 
+		switch owner := ownerType.(type) {
+		case *Struct:
+			owner.Methods[declr.Name] = declr
+		case *Interface:
+			owner.Methods[declr.Name] = declr
+		case *Type:
+			owner.Methods[declr.Name] = declr
+		}
+
 		fnAddr.Meta = meta
-		fnAddr.Owner = ownerType
 		fnAddr.IsMethod = true
+		fnAddr.Owner = ownerType
 		return nil
 	}
 
-	res <- &declr
+	in <- declr
 	return nil
+}
+
+func (b *ParseScope) handleFunctionLit(fn *ast.FuncLit) (Function, error) {
+	declr, err := b.handleFunctionType("func", fn.Type)
+	if err != nil {
+		return Function{}, err
+	}
+
+	// read location information(line, column, source text etc) for giving type.
+	declr.Location = b.getLocation(fn.Pos(), fn.End())
+
+	return declr, nil
+}
+
+func (b *ParseScope) handleFunctionType(name string, fn *ast.FuncType) (Function, error) {
+	var declr Function
+
+	// read location information(line, column, source text etc) for giving type.
+	declr.Location = b.getLocation(fn.Pos(), fn.End())
+
+	var err error
+	if fn.Params != nil {
+		declr.Arguments, err = b.handleParameterList(name, fn.Params)
+		if err != nil {
+			return declr, err
+		}
+	}
+
+	if fn.Results != nil {
+		declr.Returns, err = b.handleParameterList(name, fn.Results)
+		if err != nil {
+			return declr, err
+		}
+	}
+
+	return declr, nil
+}
+
+func (b *ParseScope) handleFunctionFieldList(ownerName string, set *ast.FieldList) ([]Function, error) {
+	var params []Function
+	for _, param := range set.List {
+		if len(param.Names) == 0 {
+			p, err := b.handleFunctionField(ownerName, param, param.Type)
+			if err != nil {
+				return params, err
+			}
+
+			params = append(params, p)
+			continue
+		}
+
+		// If we have name as a named Field or named return then
+		// appropriately
+		for _, name := range param.Names {
+			p, err := b.handleFunctionFieldWithName(ownerName, param, name, param.Type)
+			if err != nil {
+				return params, err
+			}
+
+			params = append(params, p)
+		}
+	}
+	return params, nil
 }
 
 func (b *ParseScope) handleFieldList(ownerName string, set *ast.FieldList) ([]Field, error) {
@@ -461,6 +732,25 @@ func (b *ParseScope) handleFieldList(ownerName string, set *ast.FieldList) ([]Fi
 	return params, nil
 }
 
+func (b *ParseScope) handleFieldMap(ownerName string, set *ast.FieldList) (map[string]Field, error) {
+	params := map[string]Field{}
+
+	// If we have name as a named Field or named return then
+	// appropriately
+	for _, param := range set.List {
+		for _, name := range param.Names {
+			p, err := b.handleFieldWithName(ownerName, param, name, param.Type)
+			if err != nil {
+				return params, err
+			}
+
+			params[p.Name] = p
+		}
+	}
+
+	return params, nil
+}
+
 func (b *ParseScope) handleParameterList(fnName string, set *ast.FieldList) ([]Parameter, error) {
 	var params []Parameter
 	for _, param := range set.List {
@@ -486,6 +776,80 @@ func (b *ParseScope) handleParameterList(fnName string, set *ast.FieldList) ([]P
 		}
 	}
 	return params, nil
+}
+
+func (b *ParseScope) handleFunctionField(ownerName string, f *ast.Field, t ast.Expr) (Function, error) {
+	var p Function
+
+	// read location information(line, column, source text etc) for giving type.
+	p.Location = b.getLocation(f.Pos(), f.End())
+
+	if f.Doc != nil {
+		b.comments[f.Doc] = struct{}{}
+		if doc, err := b.handleCommentGroup(f.Doc); err != nil {
+			p.Docs = append(p.Docs, doc)
+		}
+	}
+
+	if f.Comment != nil {
+		b.comments[f.Comment] = struct{}{}
+		if doc, err := b.handleCommentGroup(f.Comment); err != nil {
+			p.Docs = append(p.Docs, doc)
+		}
+	}
+
+	return p, nil
+}
+
+func (b *ParseScope) handleFunctionFieldWithName(ownerName string, f *ast.Field, nm *ast.Ident, t ast.Expr) (Function, error) {
+	fnType, ok := f.Type.(*ast.FuncType)
+	if !ok {
+		return Function{}, errors.New("failed to extract function type from Field")
+	}
+
+	p, err := b.handleFunctionType(nm.Name, fnType)
+	if err != nil {
+		return Function{}, err
+	}
+
+	p.Name = nm.Name
+
+	if f.Doc != nil {
+		b.comments[f.Doc] = struct{}{}
+		if doc, err := b.handleCommentGroup(f.Doc); err != nil {
+			p.Docs = append(p.Docs, doc)
+		}
+	}
+
+	if f.Comment != nil {
+		b.comments[f.Comment] = struct{}{}
+		if doc, err := b.handleCommentGroup(f.Comment); err != nil {
+			p.Docs = append(p.Docs, doc)
+		}
+	}
+
+	obj := b.Info.ObjectOf(nm)
+	p.Exported = obj.Exported()
+	p.Path = strings.Join([]string{obj.Pkg().Path(), ownerName, nm.Name}, ".")
+
+	// read location information(line, column, source text etc) for giving type.
+	p.Location = b.getLocation(f.Pos(), f.End())
+
+	if fnType.Params != nil {
+		p.Arguments, err = b.handleParameterList(nm.Name, fnType.Params)
+		if err != nil {
+			return p, err
+		}
+	}
+
+	if fnType.Results != nil {
+		p.Returns, err = b.handleParameterList(nm.Name, fnType.Results)
+		if err != nil {
+			return p, err
+		}
+	}
+
+	return p, nil
 }
 
 func (b *ParseScope) handleField(ownerName string, f *ast.Field, t ast.Expr) (Field, error) {
@@ -785,8 +1149,16 @@ func getVarSignature(m string) (varSignature, error) {
 	return sig, nil
 }
 
+// GetValType returns the associated type for giving value by tracking the package and type
+// it references returning the indexed version or appropriate representation for type.
+func GetValType(base *ParseScope, n *ast.Ident, f *ast.ValueSpec, others map[string]*Package) (Identity, Meta, error) {
+	var meta Meta
+
+	return nil, meta, nil
+}
+
 // GetExprType returns the associated type of a giving ast.Expr by tracking the package and type that it
-// is declared as.
+// is declared as and returns the indexed version or appropriate representation.
 func GetExprType(base *ParseScope, f *ast.Field, expr ast.Expr, others map[string]*Package) (Identity, Meta, error) {
 	if len(f.Names) != 0 {
 		if obj := base.Info.ObjectOf(f.Names[0]); obj != nil {

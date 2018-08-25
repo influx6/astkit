@@ -91,13 +91,6 @@ type Annotation struct {
 	Params   map[string]string
 }
 
-// Annotated defines a embeddable struct which declared
-// a single field that contains all associated declared
-// annotations.
-type Annotated struct {
-	Annotations []Annotation
-}
-
 // Doc represents the associated documentation for
 // a giving package or type declaration. It contains
 // the main text which is the first paragraph of the
@@ -114,9 +107,16 @@ type Doc struct {
 // attached to a giving structure declaration or variable
 // pointing to it's origin of declaration.
 type Meta struct {
-	Doc  Doc
 	Name string
 	Path string
+}
+
+// Commentaries defines a struct which embodies all comments and annotations
+// associated with a declaration.
+type Commentaries struct {
+	Doc         Doc
+	Docs        []Doc
+	Annotations []Annotation
 }
 
 // Import embodies an import declaration within a package
@@ -137,6 +137,7 @@ type Import struct {
 // from source code.
 type Expression struct {
 	Location
+	Commentaries
 
 	Value    string
 	Type     ExprType
@@ -169,13 +170,11 @@ type Package struct {
 	Name       string
 	Docs       []Doc
 	Blanks     []Variable
-	Constants  []Constant
-	Variables  []Variable
+	BadDeclrs  []BadExpr
+	Variables  map[string]*Variable
 	Types      map[string]*Type
 	Structs    map[string]*Struct
 	Interfaces map[string]*Interface
-	Maps       map[string]*Map
-	Slices     map[string]*Slice
 	Functions  map[string]*Function
 	Methods    map[string]*Function
 	Depends    map[string]*Package
@@ -186,10 +185,31 @@ type Package struct {
 // types according to it's class.
 func (p *Package) Add(obj interface{}) error {
 	switch elem := obj.(type) {
+	case BadExpr:
+		p.BadDeclrs = append(p.BadDeclrs, elem)
 	case Doc:
 		p.Docs = append(p.Docs, elem)
 	case *Package:
 		p.Depends[elem.Name] = elem
+	case Type:
+		p.Types[elem.Ref()] = &elem
+	case Interface:
+		p.Interfaces[elem.Ref()] = &elem
+	case Struct:
+		p.Structs[elem.Ref()] = &elem
+	case Function:
+		if elem.IsMethod {
+			p.Methods[elem.Ref()] = &elem
+		} else {
+			p.Functions[elem.Ref()] = &elem
+		}
+	case Variable:
+		if elem.Blank {
+			p.Blanks = append(p.Blanks, elem)
+			return nil
+		}
+
+		p.Variables[elem.Name] = &elem
 	case *Type:
 		p.Types[elem.Ref()] = elem
 	case *Interface:
@@ -202,34 +222,24 @@ func (p *Package) Add(obj interface{}) error {
 		} else {
 			p.Functions[elem.Ref()] = elem
 		}
-	case *Map:
-		p.Maps[elem.Ref()] = elem
-	case *Slice:
-		p.Slices[elem.Ref()] = elem
-	case Variable:
+	case *Variable:
 		if elem.Blank {
-			p.Blanks = append(p.Blanks, elem)
-		} else {
-			p.Variables = append(p.Variables, elem)
+			p.Blanks = append(p.Blanks, *elem)
+			return nil
 		}
-	case Constant:
-		p.Constants = append(p.Constants, elem)
+
+		p.Variables[elem.Name] = elem
 	}
 	return nil
 }
 
 // Resolve takes the list of indexed packages to internal structures
-// to resolve imported or internal types that they Pathwayerence. This is
+// to resolve imported or internal types that they Pathway. This is
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Package) Resolve(indexed map[string]*Package) error {
 	for _, blank := range p.Blanks {
 		if err := blank.Resolve(indexed); err != nil {
-			return err
-		}
-	}
-	for _, consts := range p.Constants {
-		if err := consts.Resolve(indexed); err != nil {
 			return err
 		}
 	}
@@ -261,19 +271,34 @@ func (p *Package) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
+// BadExpr represents a bad declaration or expression error
+// found within a declared source file. It is used to represent
+// any syntax error within a declaration like a struct, interface
+// or the body of a function.
+type BadExpr struct {
+	Location
+}
+
+// ID implements Identity.
+func (p BadExpr) ID() string {
+	return ""
+}
+
+// Resolve implements Resolvable interface.
+func (p *BadExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
 // Field represents field types and names
 // declared as part of a types's properties.
 type Field struct {
 	Pathway
 	Location
+	Commentaries
 
 	// Exported holds giving flag where field is an
 	// exported field or not.
 	Exported bool
-
-	// Docs are the documentation related to giving
-	// parameter within source.
-	Docs []Doc
 
 	// Name represents the name of giving interface.
 	Name string
@@ -317,10 +342,7 @@ func (p *Field) Resolve(indexed map[string]*Package) error {
 type Parameter struct {
 	Pathway
 	Location
-
-	// Docs are the documentation related to giving
-	// parameter within source.
-	Docs []Doc
+	Commentaries
 
 	// Name represents the name of giving interface.
 	Name string
@@ -363,6 +385,7 @@ func (p *Parameter) Resolve(indexed map[string]*Package) error {
 type Map struct {
 	Pathway
 	Location
+	Commentaries
 
 	// Name represents the name of giving interface.
 	Name string
@@ -404,6 +427,7 @@ func (p *Map) Resolve(indexed map[string]*Package) error {
 type Slice struct {
 	Pathway
 	Location
+	Commentaries
 
 	// Name represents the name of giving interface.
 	Name string
@@ -442,6 +466,7 @@ func (p *Slice) Resolve(indexed map[string]*Package) error {
 type Channel struct {
 	Pathway
 	Location
+	Commentaries
 
 	// Name represents the name of giving interface.
 	Name string
@@ -480,6 +505,7 @@ func (p *Channel) Resolve(indexed map[string]*Package) error {
 type Variable struct {
 	Pathway
 	Location
+	Commentaries
 
 	// Type sets the value object/declared type.
 	Type Identity
@@ -493,6 +519,10 @@ type Variable struct {
 
 	// Exported is used to indicate if type is exported or not.
 	Exported bool
+
+	// Constant is used to flag giving variable as a go const
+	// i.e preceded with a const keyword or part of a const block.
+	Constant bool
 
 	// Blank is used to indicate if variable name is blank.
 	Blank bool
@@ -524,50 +554,13 @@ func (p *Variable) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
-// Constant holds related data related to information
-// pertaining to declared constants.
-type Constant struct {
-	Pathway
-	Location
-
-	// Name represents the name of giving interface.
-	Name string
-
-	// Exported is used to indicate if type is exported or not.
-	Exported bool
-
-	// Basic defines type which holds giving constant.
-	Basic Base
-
-	// Meta provides associated package  and commentary information related to
-	// giving type.
-	Meta Meta
-
-	// resolver provides a means of the indexer to provide a custom resolving
-	// function which will run internal logic to set giving values
-	// appropriately during resolution of types.
-	resolver ResolverFn
-}
-
-// Resolve takes the list of indexed packages to internal structures
-// to resolve imported or internal types that they Pathwayerence. This is
-// used to ensure all package structures have direct link to parsed
-// type.
-func (p *Constant) Resolve(indexed map[string]*Package) error {
-	if p.resolver != nil {
-		if err := p.resolver(indexed); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // Base represents a golang base types which include
 // strings, int types, floats, complex, etc, which are
 // atomic indivisible types.
 type Base struct {
 	Pathway
 	Location
+	Commentaries
 
 	// Name represents the name of giving type.
 	Name string
@@ -611,7 +604,7 @@ func (p *Base) Resolve(indexed map[string]*Package) error {
 type Type struct {
 	Pathway
 	Location
-	Annotated
+	Commentaries
 
 	// Name represents the name of giving interface.
 	Name string
@@ -662,7 +655,7 @@ func (p *Type) Resolve(indexed map[string]*Package) error {
 type Interface struct {
 	Pathway
 	Location
-	Annotated
+	Commentaries
 
 	// Meta provides associated package and commentary information related to
 	// giving type.
@@ -720,7 +713,7 @@ func (p *Interface) Resolve(indexed map[string]*Package) error {
 type Struct struct {
 	Pathway
 	Location
-	Annotated
+	Commentaries
 
 	// Name represents the name of giving interface.
 	Name string
@@ -788,7 +781,7 @@ func (p *Struct) Resolve(indexed map[string]*Package) error {
 type Function struct {
 	Pathway
 	Location
-	Annotated
+	Commentaries
 
 	// Body contains contents of Function containing
 	// all statement declared within as it's body and
