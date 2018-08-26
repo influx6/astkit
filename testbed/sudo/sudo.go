@@ -12,7 +12,7 @@ import (
 const roook = "Roock"
 
 const (
-	vood = "wicket"
+	Vood = "wicket"
 	day  = 230
 )
 
@@ -72,7 +72,25 @@ var (
 
 type ListOfWiks []api.Rx
 
+func (ListOfWiks) Red() error {
+	return nil
+}
+
+func (l ListOfWiks) Rum() error {
+	return nil
+}
+
+func (l *ListOfWiks) Reek() error {
+	return nil
+}
+
 type Lists []interface{}
+
+type Rikooo int
+
+type Wikker string
+
+type Wikkkerr Wikker
 
 type Rizz map[string]int
 

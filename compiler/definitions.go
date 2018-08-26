@@ -1,6 +1,8 @@
 package compiler
 
-import "golang.org/x/tools/go/loader"
+import (
+	"golang.org/x/tools/go/loader"
+)
 
 // ExprType defines a int type used to represent giving
 // type of expressions such as assignment, multiplication,
@@ -172,6 +174,7 @@ type Package struct {
 	Blanks     []Variable
 	BadDeclrs  []BadExpr
 	Variables  map[string]*Variable
+	Constants  map[string]*Variable
 	Types      map[string]*Type
 	Structs    map[string]*Struct
 	Interfaces map[string]*Interface
@@ -184,6 +187,7 @@ type Package struct {
 // Add adds giving declaration into package declaration
 // types according to it's class.
 func (p *Package) Add(obj interface{}) error {
+	//fmt.Printf("Adding: %#v\n\n", obj)
 	switch elem := obj.(type) {
 	case BadExpr:
 		p.BadDeclrs = append(p.BadDeclrs, elem)
@@ -206,6 +210,11 @@ func (p *Package) Add(obj interface{}) error {
 	case Variable:
 		if elem.Blank {
 			p.Blanks = append(p.Blanks, elem)
+			return nil
+		}
+
+		if elem.Constant {
+			p.Constants[elem.Name] = &elem
 			return nil
 		}
 
@@ -510,10 +519,6 @@ type Variable struct {
 	// Type sets the value object/declared type.
 	Type Identity
 
-	// Path represents the giving full qualified package path name
-	// and type name of type in format: PackagePath.TypeName.
-	Path string
-
 	// Name represents the name of giving interface.
 	Name string
 
@@ -660,10 +665,6 @@ type Interface struct {
 	// Meta provides associated package and commentary information related to
 	// giving type.
 	Meta Meta
-
-	// Path represents the giving full qualified package path name
-	// and type name of type in format: PackagePath.TypeName.
-	Path string
 
 	// Name represents the name of giving interface.
 	Name string

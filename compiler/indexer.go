@@ -381,9 +381,13 @@ func (b *ParseScope) handleVariable(ctx context.Context, index int, named *ast.I
 	declr.Meta.Path = obj.Pkg().Path()
 	declr.Path = strings.Join([]string{obj.Pkg().Path(), named.Name}, ".")
 
+	if _, ok := obj.(*types.Const); ok {
+		declr.Constant = true
+	}
+
 	declrAddr := &declr
 	declr.resolver = func(others map[string]*Package) error {
-		vType, meta, err := GetValType(b, named, val, others)
+		vType, meta, err := b.getTypeFromValueExpr(named, val, others)
 		if err != nil {
 			return err
 		}
@@ -453,20 +457,20 @@ func (b *ParseScope) handleStruct(ctx context.Context, str *ast.StructType, ty *
 
 	for _, field := range str.Fields.List {
 		if len(field.Names) == 0 {
-			field, err := b.handleField(structName, field, field.Type)
+			fl, err := b.handleField(structName, field, field.Type)
 			if err != nil {
 				return err
 			}
-			declr.Fields[field.Name] = field
+			declr.Fields[fl.Name] = fl
 			continue
 		}
 
 		for _, name := range field.Names {
-			field, err := b.handleFieldWithName(structName, field, name, field.Type)
+			fl, err := b.handleFieldWithName(structName, field, name, field.Type)
 			if err != nil {
 				return err
 			}
-			declr.Fields[field.Name] = field
+			declr.Fields[fl.Name] = fl
 		}
 	}
 
@@ -479,7 +483,7 @@ func (b *ParseScope) handleStruct(ctx context.Context, str *ast.StructType, ty *
 		return nil
 	}
 
-	in <- declr
+	in <- &declr
 	return nil
 }
 
@@ -529,24 +533,23 @@ func (b *ParseScope) handleInterface(ctx context.Context, str *ast.InterfaceType
 
 	var resolvers []ResolverFn
 
+	declrAddr := &declr
 	for _, field := range str.Methods.List {
-		fmt.Printf("Interface %q -> %#v\n", ty.Name.Name, field)
-
 		if len(field.Names) == 0 {
-			field, err := b.handleFunctionField(ty.Name.Name, field, field.Type)
-			if err != nil {
-				return err
-			}
-			declr.Methods[field.Name] = field
+			func(f *ast.Field, tx ast.Expr) {
+				resolvers = append(resolvers, func(others map[string]*Package) error {
+					return b.handleEmbeddedInterface(ty.Name.Name, f, tx, others, declrAddr)
+				})
+			}(field, field.Type)
 			continue
 		}
 
 		for _, name := range field.Names {
-			field, err := b.handleFunctionFieldWithName(ty.Name.Name, field, name, field.Type)
+			fn, err := b.handleFunctionFieldWithName(ty.Name.Name, field, name, field.Type)
 			if err != nil {
 				return err
 			}
-			declr.Methods[field.Name] = field
+			declr.Methods[fn.Name] = fn
 		}
 	}
 
@@ -559,15 +562,62 @@ func (b *ParseScope) handleInterface(ctx context.Context, str *ast.InterfaceType
 		return nil
 	}
 
-	in <- declr
+	in <- &declr
 	return nil
 }
 
 func (b *ParseScope) handleNamedType(ctx context.Context, ty *ast.TypeSpec, spec ast.Spec, gen *ast.GenDecl, in chan interface{}) error {
 	var declr Type
 
-	in <- declr
+	declr.Location = b.getLocation(spec.Pos(), spec.End())
+
+	if gen.Doc != nil {
+		b.comments[gen.Doc] = struct{}{}
+		doc, err := b.handleCommentGroup(gen.Doc)
+		if err != nil {
+			return err
+		}
+
+		declr.Doc = doc
+	}
+
+	if ty.Doc != nil {
+		b.comments[ty.Doc] = struct{}{}
+		doc, err := b.handleCommentGroup(ty.Doc)
+		if err != nil {
+			return err
+		}
+
+		declr.Docs = append(declr.Docs, doc)
+	}
+
+	if ty.Comment != nil {
+		b.comments[ty.Comment] = struct{}{}
+		doc, err := b.handleCommentGroup(ty.Comment)
+		if err != nil {
+			return err
+		}
+
+		declr.Docs = append(declr.Docs, doc)
+	}
+
+	obj := b.Info.ObjectOf(ty.Name)
+
+	fmt.Printf("Named:Type:: %#v\n\n", ty)
+	fmt.Printf("Named:Obj:: %#v\n\n", obj.Type())
+
+	declr.Exported = obj.Exported()
+	declr.Meta.Name = obj.Pkg().Name()
+	declr.Meta.Path = obj.Pkg().Path()
+	declr.Path = strings.Join([]string{obj.Pkg().Path(), ty.Name.Name}, ".")
+
+	in <- &declr
 	return nil
+}
+
+func (b *ParseScope) handleNamedTypeSpec(fn *types.Named) (Type, error) {
+	var tp Type
+	return tp, nil
 }
 
 func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, in chan interface{}) error {
@@ -592,12 +642,6 @@ func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, in chan interface{}) e
 	declr.Meta.Name = obj.Pkg().Name()
 	declr.Meta.Path = obj.Pkg().Path()
 
-	if fn.Recv == nil {
-		declr.Path = strings.Join([]string{obj.Pkg().Path(), fn.Name.Name}, ".")
-	} else {
-		declr.Path = strings.Join([]string{obj.Pkg().Path(), fn.Recv.List[0].Names[0].Name, fn.Name.Name}, ".")
-	}
-
 	var err error
 	if fn.Type.Params != nil {
 		declr.Arguments, err = b.handleParameterList(fn.Name.Name, fn.Type.Params)
@@ -614,7 +658,8 @@ func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, in chan interface{}) e
 	}
 
 	if fn.Recv == nil {
-		in <- declr
+		declr.Path = strings.Join([]string{obj.Pkg().Path(), fn.Name.Name}, ".")
+		in <- &declr
 		return nil
 	}
 
@@ -623,11 +668,19 @@ func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, in chan interface{}) e
 		return nil
 	}
 
+	target := fn.Recv.List[0]
+	if len(target.Names) != 0 {
+		declr.Path = strings.Join([]string{obj.Pkg().Path(), fn.Recv.List[0].Names[0].Name, fn.Name.Name}, ".")
+	} else {
+		ident := target.Type.(*ast.Ident)
+		declr.Path = strings.Join([]string{obj.Pkg().Path(), ident.Name, fn.Name.Name}, ".")
+	}
+
 	fnAddr := &declr
 	owner := fn.Recv.List[0]
 
 	declr.resolver = func(others map[string]*Package) error {
-		ownerType, meta, err := GetExprType(b, owner, owner.Type, others)
+		ownerType, meta, err := b.getTypeFromFieldExpr(owner, owner.Type, others)
 		if err != nil {
 			return err
 		}
@@ -647,7 +700,7 @@ func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, in chan interface{}) e
 		return nil
 	}
 
-	in <- declr
+	in <- &declr
 	return nil
 }
 
@@ -787,8 +840,33 @@ func (b *ParseScope) handleParameterList(fnName string, set *ast.FieldList) ([]P
 	return params, nil
 }
 
+func (b *ParseScope) handleEmbeddedInterface(ownerName string, f *ast.Field, t ast.Expr, others map[string]*Package, host *Interface) error {
+	identity, _, err := b.getTypeFromFieldExpr(f, t, others)
+	if err != nil {
+		return err
+	}
+
+	embedded, ok := identity.(*Interface)
+	if !ok {
+		//return errors.New("Expected type should be an interface")
+	}
+
+	_ = embedded
+	//host.Composes[identity.ID()] = embedded
+	return nil
+}
+
 func (b *ParseScope) handleFunctionField(ownerName string, f *ast.Field, t ast.Expr) (Function, error) {
 	var p Function
+
+	id, ok := t.(*ast.Ident)
+	if !ok {
+		return p, errors.New("Expected *ast.Ident as ast.Expr for handleFunctionField")
+	}
+
+	obj := b.Info.ObjectOf(id)
+	p.Exported = obj.Exported()
+	p.Path = strings.Join([]string{obj.Pkg().Path(), ownerName, id.Name}, ".")
 
 	// read location information(line, column, source text etc) for giving type.
 	p.Location = b.getLocation(f.Pos(), f.End())
@@ -805,6 +883,18 @@ func (b *ParseScope) handleFunctionField(ownerName string, f *ast.Field, t ast.E
 		if doc, err := b.handleCommentGroup(f.Comment); err != nil {
 			p.Docs = append(p.Docs, doc)
 		}
+	}
+
+	pAddr := &p
+	p.resolver = func(others map[string]*Package) error {
+		mtype, meta, err := b.getTypeFromFieldExpr(f, t, others)
+		if err != nil {
+			return err
+		}
+
+		pAddr.Meta = meta
+		pAddr.Owner = mtype
+		return nil
 	}
 
 	return p, nil
@@ -886,8 +976,8 @@ func (b *ParseScope) handleField(ownerName string, f *ast.Field, t ast.Expr) (Fi
 	}
 
 	pAddr := &p
-	p.resolver = func(packages map[string]*Package) error {
-		tl, meta, err := GetExprType(b, f, t, packages)
+	p.resolver = func(others map[string]*Package) error {
+		tl, meta, err := b.getTypeFromFieldExpr(f, t, others)
 		if err != nil {
 			return err
 		}
@@ -931,8 +1021,8 @@ func (b *ParseScope) handleFieldWithName(ownerName string, f *ast.Field, nm *ast
 
 	pAddr := &p
 
-	p.resolver = func(packages map[string]*Package) error {
-		tl, meta, err := GetExprType(b, f, t, packages)
+	p.resolver = func(others map[string]*Package) error {
+		tl, meta, err := b.getTypeFromFieldExpr(f, t, others)
 		if err != nil {
 			return err
 		}
@@ -968,8 +1058,8 @@ func (b *ParseScope) handleParameter(fnName string, f *ast.Field, t ast.Expr) (P
 	pAddr := &p
 	if elip, ok := t.(*ast.Ellipsis); ok {
 		p.IsVariadic = true
-		p.resolver = func(packages map[string]*Package) error {
-			tl, meta, err := GetExprType(b, f, elip.Elt, packages)
+		p.resolver = func(others map[string]*Package) error {
+			tl, meta, err := b.getTypeFromFieldExpr(f, elip.Elt, others)
 			if err != nil {
 				return err
 			}
@@ -981,8 +1071,8 @@ func (b *ParseScope) handleParameter(fnName string, f *ast.Field, t ast.Expr) (P
 		return p, nil
 	}
 
-	p.resolver = func(packages map[string]*Package) error {
-		tl, meta, err := GetExprType(b, f, t, packages)
+	p.resolver = func(others map[string]*Package) error {
+		tl, meta, err := b.getTypeFromFieldExpr(f, t, others)
 		if err != nil {
 			return err
 		}
@@ -1022,8 +1112,8 @@ func (b *ParseScope) handleParameterWithName(fnName string, f *ast.Field, nm *as
 	pAddr := &p
 	if elip, ok := t.(*ast.Ellipsis); ok {
 		p.IsVariadic = true
-		p.resolver = func(packages map[string]*Package) error {
-			tl, meta, err := GetExprType(b, f, elip.Elt, packages)
+		p.resolver = func(others map[string]*Package) error {
+			tl, meta, err := b.getTypeFromFieldExpr(f, elip.Elt, others)
 			if err != nil {
 				return err
 			}
@@ -1035,8 +1125,8 @@ func (b *ParseScope) handleParameterWithName(fnName string, f *ast.Field, nm *as
 		return p, nil
 	}
 
-	p.resolver = func(packages map[string]*Package) error {
-		tl, meta, err := GetExprType(b, f, t, packages)
+	p.resolver = func(others map[string]*Package) error {
+		tl, meta, err := b.getTypeFromFieldExpr(f, t, others)
 		if err != nil {
 			return err
 		}
@@ -1134,6 +1224,21 @@ func (b *ParseScope) getImport(aliasName string) (Import, error) {
 	return Import{}, errors.Wrap(ErrNotFound, "import path with alias %q not found", aliasName)
 }
 
+func (b *ParseScope) getTypeFromTypeSpecExpr(ty *ast.TypeSpec, e ast.Expr, others map[string]*Package) (Identity, Meta, error) {
+	var meta Meta
+	return nil, meta, nil
+}
+
+func (b *ParseScope) getTypeFromFieldExpr(f *ast.Field, e ast.Expr, others map[string]*Package) (Identity, Meta, error) {
+	var meta Meta
+	return nil, meta, nil
+}
+
+func (b *ParseScope) getTypeFromValueExpr(f *ast.Ident, e *ast.ValueSpec, others map[string]*Package) (Identity, Meta, error) {
+	var meta Meta
+	return nil, meta, nil
+}
+
 //******************************************************************************
 //  Utilities
 //******************************************************************************
@@ -1158,68 +1263,39 @@ func getVarSignature(m string) (varSignature, error) {
 	return sig, nil
 }
 
-// GetValType returns the associated type for giving value by tracking the package and type
-// it references returning the indexed version or appropriate representation for type.
-func GetValType(base *ParseScope, n *ast.Ident, f *ast.ValueSpec, others map[string]*Package) (Identity, Meta, error) {
-	var meta Meta
-
-	return nil, meta, nil
-}
-
 // GetExprType returns the associated type of a giving ast.Expr by tracking the package and type that it
 // is declared as and returns the indexed version or appropriate representation.
-func GetExprType(base *ParseScope, f *ast.Field, expr ast.Expr, others map[string]*Package) (Identity, Meta, error) {
-	if len(f.Names) != 0 {
-		if obj := base.Info.ObjectOf(f.Names[0]); obj != nil {
-			return GetTypeFromObject(base, obj, f, expr, others)
-		}
-	}
-
-	var meta Meta
-	switch t := expr.(type) {
-	case *ast.Ident:
-	case *ast.BasicLit:
-		return &Base{
-			Name:     t.Value,
-			Exported: true,
-		}, meta, nil
-	case *ast.StarExpr:
-	case *ast.UnaryExpr:
-	case *ast.SelectorExpr:
-	case *ast.IndexExpr:
-	case *ast.CallExpr:
-	case *ast.CompositeLit:
-	case *ast.ArrayType:
-	case *ast.FuncLit:
-	case *ast.ParenExpr:
-	case *ast.KeyValueExpr:
-	case *ast.MapType:
-	case *ast.BinaryExpr:
-	case *ast.InterfaceType:
-	}
-
-	return nil, meta, nil
-}
-
-// GetTypeFromObject returns giving Object type information from provided types.Object retrieved from underlying field name.
-func GetTypeFromObject(base *ParseScope, obj types.Object, f *ast.Field, expr ast.Expr, others map[string]*Package) (Identity, Meta, error) {
-	var meta Meta
-	return nil, meta, nil
-}
-
-// GetTypeFromSet attempts to return a concrete Expr object which implements interface from types.Object provided.
-func GetTypeFromSet(base *ParseScope, others map[string]*Package, obj types.Object) (Identity, error) {
-	//targetPkg, ok := others[obj.Pkg().Path()]
-	//if !ok {
-	//	return nil, errors.New("not found")
-	//}
-
-	//switch obj.Type().(type) {
-	//
-	//}
-
-	return nil, nil
-}
+//func GetExprType(base *ParseScope, f *ast.Field, expr ast.Expr, others map[string]*Package) (Identity, Meta, error) {
+//
+//	//fmt.Printf("GetExprType: %#v -> %#v\n", f, expr)
+//
+//	var meta Meta
+//	switch t := expr.(type) {
+//	case *ast.Ident:
+//		//obj := base.Info.ObjectOf(t)
+//		//fmt.Printf("Ident-OBJ: %#v\n\n", obj.Type().Underlying())
+//	case *ast.BasicLit:
+//		return &Base{
+//			Name:     t.Value,
+//			Exported: true,
+//		}, meta, nil
+//	case *ast.StarExpr:
+//	case *ast.UnaryExpr:
+//	case *ast.SelectorExpr:
+//	case *ast.IndexExpr:
+//	case *ast.CallExpr:
+//	case *ast.CompositeLit:
+//	case *ast.ArrayType:
+//	case *ast.FuncLit:
+//	case *ast.ParenExpr:
+//	case *ast.KeyValueExpr:
+//	case *ast.MapType:
+//	case *ast.BinaryExpr:
+//	case *ast.InterfaceType:
+//	}
+//
+//	return nil, meta, nil
+//}
 
 var (
 	moreSpaces = regexp.MustCompile(`\s+`)
