@@ -1,6 +1,8 @@
 package compiler
 
 import (
+	"fmt"
+
 	"golang.org/x/tools/go/loader"
 )
 
@@ -187,7 +189,7 @@ type Package struct {
 // Add adds giving declaration into package declaration
 // types according to it's class.
 func (p *Package) Add(obj interface{}) error {
-	//fmt.Printf("Adding: %#v\n\n", obj)
+	fmt.Printf("Adding: %#v\n\n", obj)
 	switch elem := obj.(type) {
 	case BadExpr:
 		p.BadDeclrs = append(p.BadDeclrs, elem)
@@ -431,15 +433,21 @@ func (p *Map) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
-// Slice embodies a giving slice type with
+// List embodies a giving slice or array type with
 // an associated name and type.
-type Slice struct {
+type List struct {
 	Pathway
 	Location
 	Commentaries
 
+	// IsSlice indicates if giving type is a slice or array type.
+	IsSlice bool
+
 	// Name represents the name of giving interface.
 	Name string
+
+	// Length defines giving length associated with slice or array.
+	Length int64
 
 	// Exported is used to indicate if type is exported or not.
 	Exported bool
@@ -461,7 +469,7 @@ type Slice struct {
 // to resolve imported or internal types that they Pathwayerence. This is
 // used to ensure all package structures have direct link to parsed
 // type.
-func (p *Slice) Resolve(indexed map[string]*Package) error {
+func (p *List) Resolve(indexed map[string]*Package) error {
 	if p.resolver != nil {
 		if err := p.resolver(indexed); err != nil {
 			return err

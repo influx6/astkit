@@ -568,7 +568,6 @@ func (b *ParseScope) handleInterface(ctx context.Context, str *ast.InterfaceType
 
 func (b *ParseScope) handleNamedType(ctx context.Context, ty *ast.TypeSpec, spec ast.Spec, gen *ast.GenDecl, in chan interface{}) error {
 	var declr Type
-
 	declr.Location = b.getLocation(spec.Pos(), spec.End())
 
 	if gen.Doc != nil {
@@ -603,21 +602,25 @@ func (b *ParseScope) handleNamedType(ctx context.Context, ty *ast.TypeSpec, spec
 
 	obj := b.Info.ObjectOf(ty.Name)
 
-	fmt.Printf("Named:Type:: %#v\n\n", ty)
-	fmt.Printf("Named:Obj:: %#v\n\n", obj.Type())
-
 	declr.Exported = obj.Exported()
 	declr.Meta.Name = obj.Pkg().Name()
 	declr.Meta.Path = obj.Pkg().Path()
 	declr.Path = strings.Join([]string{obj.Pkg().Path(), ty.Name.Name}, ".")
 
+	declrAddr := &declr
+	declr.resolver = func(others map[string]*Package) error {
+		vType, meta, err := b.getTypeFromTypeSpecExpr(ty, ty.Type, others)
+		if err != nil {
+			return err
+		}
+
+		declrAddr.Meta = meta
+		declrAddr.Type = vType
+		return nil
+	}
+
 	in <- &declr
 	return nil
-}
-
-func (b *ParseScope) handleNamedTypeSpec(fn *types.Named) (Type, error) {
-	var tp Type
-	return tp, nil
 }
 
 func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, in chan interface{}) error {
@@ -1224,19 +1227,37 @@ func (b *ParseScope) getImport(aliasName string) (Import, error) {
 	return Import{}, errors.Wrap(ErrNotFound, "import path with alias %q not found", aliasName)
 }
 
-func (b *ParseScope) getTypeFromTypeSpecExpr(ty *ast.TypeSpec, e ast.Expr, others map[string]*Package) (Identity, Meta, error) {
+func (b *ParseScope) getTypeFromTypeSpecExpr(t *ast.TypeSpec, e ast.Expr, others map[string]*Package) (Identity, Meta, error) {
+	fmt.Printf("GetTypeFromTypeSpec: %#v -> %#v\n\n", t, e)
 	var meta Meta
 	return nil, meta, nil
 }
 
 func (b *ParseScope) getTypeFromFieldExpr(f *ast.Field, e ast.Expr, others map[string]*Package) (Identity, Meta, error) {
+	fmt.Printf("GetTypeFromField: %#v -> %#v\n\n", f, e)
 	var meta Meta
 	return nil, meta, nil
 }
 
-func (b *ParseScope) getTypeFromValueExpr(f *ast.Ident, e *ast.ValueSpec, others map[string]*Package) (Identity, Meta, error) {
+func (b *ParseScope) getTypeFromValueExpr(f *ast.Ident, v *ast.ValueSpec, others map[string]*Package) (Identity, Meta, error) {
+	fmt.Printf("GetTypeFromValue: %#v -> %#v\n\n", f, v)
 	var meta Meta
 	return nil, meta, nil
+}
+
+func (b *ParseScope) findTypeInPackages(f *ast.Ident, e ast.Expr, others map[string]*Package) (Identity, error) {
+
+	return nil, nil
+}
+
+func (b *ParseScope) parseTypeInExpr(t interface{}) (Identity, error) {
+	switch t.(type) {
+	case *types.Basic:
+	case *types.Array:
+	case *ast.ArrayType:
+	}
+
+	return nil, errors.New("unknown type provided: %#v", t)
 }
 
 //******************************************************************************
