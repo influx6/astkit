@@ -39,6 +39,8 @@ var (
 
 	_ = "Render"
 
+	mko chan struct{}
+
 	one, two, three, four = 1, 2, 3, 4
 
 	one2, two2, three2, four2 int64 = 1, 2, 3, 4
@@ -46,6 +48,8 @@ var (
 	twethen string = "Wikkileaks"
 
 	vikvi = make(chan struct{}, 0)
+
+	vikvi2 chan struct{} = make(chan struct{}, 0)
 
 	nik = func() {}
 

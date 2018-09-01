@@ -386,8 +386,23 @@ func (b *ParseScope) handleVariable(ctx context.Context, index int, named *ast.I
 	}
 
 	declrAddr := &declr
+
+	if len(val.Values) == 0 {
+		declr.resolver = func(others map[string]*Package) error {
+			vType, err := b.getTypeFromValueExpr(named, nil, val, others)
+			if err != nil {
+				return err
+			}
+
+			declrAddr.Type = vType
+			return nil
+		}
+		in <- &declr
+		return nil
+	}
+
 	declr.resolver = func(others map[string]*Package) error {
-		vType, err := b.getTypeFromValueExpr(named, val, others)
+		vType, err := b.getTypeFromValueExpr(named, val.Values[index], val, others)
 		if err != nil {
 			return err
 		}
@@ -1229,28 +1244,29 @@ func (b *ParseScope) getTypeFromFieldExpr(f *ast.Field, e ast.Expr, others map[s
 	return nil, nil
 }
 
-func (b *ParseScope) getTypeFromValueExpr(f *ast.Ident, v *ast.ValueSpec, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Var::Type(%q): %#v -> \n", f.Name, v.Type)
+func (b *ParseScope) getTypeFromValueExpr(f *ast.Ident, val ast.Expr, v *ast.ValueSpec, others map[string]*Package) (Identity, error) {
+	var err error
+	var base Identity
 
 	if v.Type != nil {
-		base, err := b.findTypeInPackages(v.Type, others)
-		if err != nil {
-			return nil, err
-		}
-
-		if len(v.Values) == 0 {
-			return base, nil
-		}
-
-		return b.processValues(base, v.Values[0], v, others)
+		base, err = b.findTypeInPackages(v.Type, others)
+	} else {
+		base, err = b.findTypeInPackages(f, others)
 	}
 
-	for index, item := range v.Names {
+	fmt.Printf("Var::Name(%q): %#v -> \n", f.Name, f)
+	fmt.Printf("GetType::Value: %#v -> \n", val)
+	fmt.Printf("GetTo: %#v \n\n", base)
 
+	if err != nil {
+		return nil, err
 	}
-	fmt.Printf("GetType::Values: %#v -> \n\n", v)
 
-	return nil, nil
+	if val == nil {
+		return base, nil
+	}
+
+	return b.processValues(base, val, v, others)
 }
 
 func (b *ParseScope) processValues(owner Identity, value interface{}, cave *ast.ValueSpec, others map[string]*Package) (Identity, error) {
@@ -1275,40 +1291,47 @@ func (b *ParseScope) processValues(owner Identity, value interface{}, cave *ast.
 }
 
 func (b *ParseScope) findTypeInPackages(e interface{}, others map[string]*Package) (Identity, error) {
+	fmt.Printf("TypeInPkg: %#v \n", e)
+
 	switch core := e.(type) {
 	case *ast.Ident:
-		return b.findTypeInPackagesWithIdent(core, others)
-	}
-	return nil, nil
-}
-
-func (b *ParseScope) findTypeInPackagesWithIdent(f *ast.Ident, others map[string]*Package) (Identity, error) {
-	obj := b.Info.ObjectOf(f)
-	if obj == nil {
-		return nil, errors.Wrap(ErrNotFound, "ast.Object should exists for ident")
-	}
-
-	fmt.Printf("IdentObj: %#v\n", obj)
-	fmt.Printf("IdentObjPkg: %#v\n", obj.Pkg())
-	fmt.Printf("IdentObjType: %#v\n\n", obj.Type())
-
-	switch obj.Type().(type) {
+		obj := b.Info.ObjectOf(core)
+		return b.findTypeInPackages(obj.Type(), others)
 	case *types.Basic:
-		return b.transformType(obj.Type(), others)
-	}
-
-	return nil, errors.Wrap(ErrNotFound, "ast.Object has unknown/untransformable type")
-}
-
-func (b *ParseScope) transformType(f interface{}, others map[string]*Package) (Identity, error) {
-	switch tf := f.(type) {
-	case *types.Basic:
-		return BaseFor(tf.Name()), nil
+		return BaseFor(core.Name()), nil
+	case *ast.BasicLit:
+	case *ast.CallExpr:
+	case *ast.CompositeLit:
+	case *ast.StarExpr:
+	case *ast.UnaryExpr:
+	case *ast.SelectorExpr:
+	case *ast.IndexExpr:
+	case *types.Slice:
+		return List{}, nil
 	case *types.Array:
+		return List{}, nil
 	case *ast.ArrayType:
+		return List{}, nil
+	case *ast.FuncLit:
+	case *ast.ParenExpr:
+	case *ast.MapType:
+		return Map{}, nil
+	case *types.Map:
+		return Map{}, nil
+	case *ast.SliceExpr:
+		return List{}, nil
+	case *ast.ChanType:
+		return Channel{}, nil
+	case *types.Chan:
+		return Channel{}, nil
+	case *ast.KeyValueExpr:
+	case *types.Signature:
+		return CallExpr{}, nil
+	case *ast.BinaryExpr:
+	case *ast.InterfaceType:
 	}
 
-	return nil, nil
+	return nil, errors.Wrap(ErrNotFound, "unable to find type")
 }
 
 //******************************************************************************
@@ -1334,40 +1357,6 @@ func getVarSignature(m string) (varSignature, error) {
 	sig.Package = parts[2]
 	return sig, nil
 }
-
-// GetExprType returns the associated type of a giving ast.Expr by tracking the package and type that it
-// is declared as and returns the indexed version or appropriate representation.
-//func GetExprType(base *ParseScope, f *ast.Field, expr ast.Expr, others map[string]*Package) (Identity, error) {
-//
-//	//fmt.Printf("GetExprType: %#v -> %#v\n", f, expr)
-//
-//	var meta Meta
-//	switch t := expr.(type) {
-//	case *ast.Ident:
-//		//obj := base.Info.ObjectOf(t)
-//		//fmt.Printf("Ident-OBJ: %#v\n\n", obj.Type().Underlying())
-//	case *ast.BasicLit:
-//		return &Base{
-//			Name:     t.Value,
-//			Exported: true,
-//		}, nil
-//	case *ast.StarExpr:
-//	case *ast.UnaryExpr:
-//	case *ast.SelectorExpr:
-//	case *ast.IndexExpr:
-//	case *ast.CallExpr:
-//	case *ast.CompositeLit:
-//	case *ast.ArrayType:
-//	case *ast.FuncLit:
-//	case *ast.ParenExpr:
-//	case *ast.KeyValueExpr:
-//	case *ast.MapType:
-//	case *ast.BinaryExpr:
-//	case *ast.InterfaceType:
-//	}
-//
-//	return nil, nil
-//}
 
 var (
 	moreSpaces = regexp.MustCompile(`\s+`)
