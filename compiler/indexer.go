@@ -387,12 +387,11 @@ func (b *ParseScope) handleVariable(ctx context.Context, index int, named *ast.I
 
 	declrAddr := &declr
 	declr.resolver = func(others map[string]*Package) error {
-		vType, meta, err := b.getTypeFromValueExpr(named, val, others)
+		vType, err := b.getTypeFromValueExpr(named, val, others)
 		if err != nil {
 			return err
 		}
 
-		declrAddr.Meta = meta
 		declrAddr.Type = vType
 		return nil
 	}
@@ -609,12 +608,11 @@ func (b *ParseScope) handleNamedType(ctx context.Context, ty *ast.TypeSpec, spec
 
 	declrAddr := &declr
 	declr.resolver = func(others map[string]*Package) error {
-		vType, meta, err := b.getTypeFromTypeSpecExpr(ty, ty.Type, others)
+		vType, err := b.getTypeFromTypeSpecExpr(ty, ty.Type, others)
 		if err != nil {
 			return err
 		}
 
-		declrAddr.Meta = meta
 		declrAddr.Type = vType
 		return nil
 	}
@@ -683,7 +681,7 @@ func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, in chan interface{}) e
 	owner := fn.Recv.List[0]
 
 	declr.resolver = func(others map[string]*Package) error {
-		ownerType, meta, err := b.getTypeFromFieldExpr(owner, owner.Type, others)
+		ownerType, err := b.getTypeFromFieldExpr(owner, owner.Type, others)
 		if err != nil {
 			return err
 		}
@@ -697,7 +695,6 @@ func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, in chan interface{}) e
 			owner.Methods[declr.Name] = declr
 		}
 
-		fnAddr.Meta = meta
 		fnAddr.IsMethod = true
 		fnAddr.Owner = ownerType
 		return nil
@@ -844,7 +841,7 @@ func (b *ParseScope) handleParameterList(fnName string, set *ast.FieldList) ([]P
 }
 
 func (b *ParseScope) handleEmbeddedInterface(ownerName string, f *ast.Field, t ast.Expr, others map[string]*Package, host *Interface) error {
-	identity, _, err := b.getTypeFromFieldExpr(f, t, others)
+	identity, err := b.getTypeFromFieldExpr(f, t, others)
 	if err != nil {
 		return err
 	}
@@ -890,12 +887,11 @@ func (b *ParseScope) handleFunctionField(ownerName string, f *ast.Field, t ast.E
 
 	pAddr := &p
 	p.resolver = func(others map[string]*Package) error {
-		mtype, meta, err := b.getTypeFromFieldExpr(f, t, others)
+		mtype, err := b.getTypeFromFieldExpr(f, t, others)
 		if err != nil {
 			return err
 		}
 
-		pAddr.Meta = meta
 		pAddr.Owner = mtype
 		return nil
 	}
@@ -918,9 +914,11 @@ func (b *ParseScope) handleFunctionFieldWithName(ownerName string, f *ast.Field,
 
 	if f.Doc != nil {
 		b.comments[f.Doc] = struct{}{}
-		if doc, err := b.handleCommentGroup(f.Doc); err != nil {
-			p.Docs = append(p.Docs, doc)
+		doc, err := b.handleCommentGroup(f.Doc)
+		if err != nil {
+			return p, err
 		}
+		p.Docs = append(p.Docs, doc)
 	}
 
 	if f.Comment != nil {
@@ -980,13 +978,12 @@ func (b *ParseScope) handleField(ownerName string, f *ast.Field, t ast.Expr) (Fi
 
 	pAddr := &p
 	p.resolver = func(others map[string]*Package) error {
-		tl, meta, err := b.getTypeFromFieldExpr(f, t, others)
+		tl, err := b.getTypeFromFieldExpr(f, t, others)
 		if err != nil {
 			return err
 		}
 
 		pAddr.Type = tl
-		pAddr.Meta = meta
 		return nil
 	}
 
@@ -1025,13 +1022,12 @@ func (b *ParseScope) handleFieldWithName(ownerName string, f *ast.Field, nm *ast
 	pAddr := &p
 
 	p.resolver = func(others map[string]*Package) error {
-		tl, meta, err := b.getTypeFromFieldExpr(f, t, others)
+		tl, err := b.getTypeFromFieldExpr(f, t, others)
 		if err != nil {
 			return err
 		}
 
 		pAddr.Type = tl
-		pAddr.Meta = meta
 		return nil
 	}
 
@@ -1062,26 +1058,24 @@ func (b *ParseScope) handleParameter(fnName string, f *ast.Field, t ast.Expr) (P
 	if elip, ok := t.(*ast.Ellipsis); ok {
 		p.IsVariadic = true
 		p.resolver = func(others map[string]*Package) error {
-			tl, meta, err := b.getTypeFromFieldExpr(f, elip.Elt, others)
+			tl, err := b.getTypeFromFieldExpr(f, elip.Elt, others)
 			if err != nil {
 				return err
 			}
 
 			pAddr.Type = tl
-			pAddr.Meta = meta
 			return nil
 		}
 		return p, nil
 	}
 
 	p.resolver = func(others map[string]*Package) error {
-		tl, meta, err := b.getTypeFromFieldExpr(f, t, others)
+		tl, err := b.getTypeFromFieldExpr(f, t, others)
 		if err != nil {
 			return err
 		}
 
 		pAddr.Type = tl
-		pAddr.Meta = meta
 		return nil
 	}
 
@@ -1116,26 +1110,24 @@ func (b *ParseScope) handleParameterWithName(fnName string, f *ast.Field, nm *as
 	if elip, ok := t.(*ast.Ellipsis); ok {
 		p.IsVariadic = true
 		p.resolver = func(others map[string]*Package) error {
-			tl, meta, err := b.getTypeFromFieldExpr(f, elip.Elt, others)
+			tl, err := b.getTypeFromFieldExpr(f, elip.Elt, others)
 			if err != nil {
 				return err
 			}
 
 			pAddr.Type = tl
-			pAddr.Meta = meta
 			return nil
 		}
 		return p, nil
 	}
 
 	p.resolver = func(others map[string]*Package) error {
-		tl, meta, err := b.getTypeFromFieldExpr(f, t, others)
+		tl, err := b.getTypeFromFieldExpr(f, t, others)
 		if err != nil {
 			return err
 		}
 
 		pAddr.Type = tl
-		pAddr.Meta = meta
 		return nil
 	}
 
@@ -1227,45 +1219,96 @@ func (b *ParseScope) getImport(aliasName string) (Import, error) {
 	return Import{}, errors.Wrap(ErrNotFound, "import path with alias %q not found", aliasName)
 }
 
-func (b *ParseScope) getTypeFromTypeSpecExpr(t *ast.TypeSpec, e ast.Expr, others map[string]*Package) (Identity, Meta, error) {
+func (b *ParseScope) getTypeFromTypeSpecExpr(t *ast.TypeSpec, e ast.Expr, others map[string]*Package) (Identity, error) {
 	//fmt.Printf("GetTypeFromTypeSpec: %#v -> %#v\n\n", t, e)
-	var meta Meta
-	return nil, meta, nil
+	return nil, nil
 }
 
-func (b *ParseScope) getTypeFromFieldExpr(f *ast.Field, e ast.Expr, others map[string]*Package) (Identity, Meta, error) {
+func (b *ParseScope) getTypeFromFieldExpr(f *ast.Field, e ast.Expr, others map[string]*Package) (Identity, error) {
 	//fmt.Printf("GetTypeFromField: %#v -> %#v\n\n", f, e)
-	var meta Meta
-	return nil, meta, nil
+	return nil, nil
 }
 
-func (b *ParseScope) getTypeFromValueExpr(f *ast.Ident, v *ast.ValueSpec, others map[string]*Package) (Identity, Meta, error) {
-	fmt.Printf("GetTypeFromValue: %#v -> %#v\n", f, v)
-	fmt.Printf("GetType::Type: %#v -> \n\n", v.Type)
-	//fmt.Printf("GetType::Values: %#v -> \n\n", v.Values)
+func (b *ParseScope) getTypeFromValueExpr(f *ast.Ident, v *ast.ValueSpec, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Var::Type(%q): %#v -> \n", f.Name, v.Type)
 
-	var meta Meta
-	return nil, meta, nil
-}
+	if v.Type != nil {
+		base, err := b.findTypeInPackages(v.Type, others)
+		if err != nil {
+			return nil, err
+		}
 
-func (b *ParseScope) findTypeInPackages(f *ast.Ident, e ast.Expr, others map[string]*Package) (Identity, error) {
+		if len(v.Values) == 0 {
+			return base, nil
+		}
+
+		return b.processValues(base, v.Values[0], v, others)
+	}
+
+	for index, item := range v.Names {
+
+	}
+	fmt.Printf("GetType::Values: %#v -> \n\n", v)
 
 	return nil, nil
+}
+
+func (b *ParseScope) processValues(owner Identity, value interface{}, cave *ast.ValueSpec, others map[string]*Package) (Identity, error) {
+	//fmt.Printf("Val:TT %#v\n", value)
+
+	switch rbase := owner.(type) {
+	case Base:
+		switch vt := value.(type) {
+		case *ast.Ident:
+			rbase.Value = vt.Name
+		case *ast.BasicLit:
+			rbase.Value = vt.Value
+		default:
+			return nil, errors.New("invalid type for value expected *ast.Ident")
+		}
+
+		return rbase, nil
+	case List:
+	case Map:
+	}
+	return owner, nil
+}
+
+func (b *ParseScope) findTypeInPackages(e interface{}, others map[string]*Package) (Identity, error) {
+	switch core := e.(type) {
+	case *ast.Ident:
+		return b.findTypeInPackagesWithIdent(core, others)
+	}
+	return nil, nil
+}
+
+func (b *ParseScope) findTypeInPackagesWithIdent(f *ast.Ident, others map[string]*Package) (Identity, error) {
+	obj := b.Info.ObjectOf(f)
+	if obj == nil {
+		return nil, errors.Wrap(ErrNotFound, "ast.Object should exists for ident")
+	}
+
+	fmt.Printf("IdentObj: %#v\n", obj)
+	fmt.Printf("IdentObjPkg: %#v\n", obj.Pkg())
+	fmt.Printf("IdentObjType: %#v\n\n", obj.Type())
+
+	switch obj.Type().(type) {
+	case *types.Basic:
+		return b.transformType(obj.Type(), others)
+	}
+
+	return nil, errors.Wrap(ErrNotFound, "ast.Object has unknown/untransformable type")
 }
 
 func (b *ParseScope) transformType(f interface{}, others map[string]*Package) (Identity, error) {
-
-	return nil, nil
-}
-
-func (b *ParseScope) parseTypeInExpr(t interface{}) (Identity, error) {
-	switch t.(type) {
+	switch tf := f.(type) {
 	case *types.Basic:
+		return BaseFor(tf.Name()), nil
 	case *types.Array:
 	case *ast.ArrayType:
 	}
 
-	return nil, errors.New("unknown type provided: %#v", t)
+	return nil, nil
 }
 
 //******************************************************************************
@@ -1294,7 +1337,7 @@ func getVarSignature(m string) (varSignature, error) {
 
 // GetExprType returns the associated type of a giving ast.Expr by tracking the package and type that it
 // is declared as and returns the indexed version or appropriate representation.
-//func GetExprType(base *ParseScope, f *ast.Field, expr ast.Expr, others map[string]*Package) (Identity, Meta, error) {
+//func GetExprType(base *ParseScope, f *ast.Field, expr ast.Expr, others map[string]*Package) (Identity, error) {
 //
 //	//fmt.Printf("GetExprType: %#v -> %#v\n", f, expr)
 //
@@ -1307,7 +1350,7 @@ func getVarSignature(m string) (varSignature, error) {
 //		return &Base{
 //			Name:     t.Value,
 //			Exported: true,
-//		}, meta, nil
+//		}, nil
 //	case *ast.StarExpr:
 //	case *ast.UnaryExpr:
 //	case *ast.SelectorExpr:
@@ -1323,7 +1366,7 @@ func getVarSignature(m string) (varSignature, error) {
 //	case *ast.InterfaceType:
 //	}
 //
-//	return nil, meta, nil
+//	return nil, nil
 //}
 
 var (

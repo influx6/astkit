@@ -16,7 +16,16 @@ const (
 	day  = 230
 )
 
+var _ string
 var _ string = "Rico"
+var _ byte = 1
+var _ bool = true
+var _ int = 10
+var _ int64 = 10
+var _ float32 = 10
+var _ float64 = 10
+var _ complex64 = 10
+var _ complex128 = 10
 
 var ui int = 300
 

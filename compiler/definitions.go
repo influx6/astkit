@@ -39,7 +39,6 @@ type Address interface {
 
 // Expr defines a interface exposing a giving method.
 type Expr interface {
-	Address
 	Resolvable
 	GeoCoordinates
 }
@@ -259,7 +258,7 @@ func (p *Package) GetInterface(methodName string) (*Interface, error) {
 	return nil, errors.Wrap(ErrNotFound, "Interface with addrs %q not found", addr)
 }
 
-// GetFunction attempts to return Function reference for giving package function declared
+// GetFunctionFor attempts to return Function reference for giving package function declared
 // in Package, from Package.Functions dictionary.
 func (p *Package) GetFunctionFor(methodName string) (*Function, error) {
 	points := []string{p.Name, methodName}
@@ -284,7 +283,6 @@ func (p *Package) GetMethodFor(typeName string, methodName string) (*Function, e
 // Add adds giving declaration into package declaration
 // types according to it's class.
 func (p *Package) Add(obj interface{}) error {
-	//fmt.Printf("Adding: %#v\n\n", obj)
 	switch elem := obj.(type) {
 	case BadExpr:
 		p.BadDeclrs = append(p.BadDeclrs, elem)
@@ -379,6 +377,8 @@ func (p *Package) Resolve(indexed map[string]*Package) error {
 
 // ReturnsExpr represents giving Returns loop.
 type ReturnsExpr struct {
+	Commentaries
+
 	Location
 }
 
@@ -394,6 +394,8 @@ func (p *ReturnsExpr) Resolve(indexed map[string]*Package) error {
 
 // AssignExpr represents giving Assign loop.
 type AssignExpr struct {
+	Commentaries
+
 	Location
 }
 
@@ -409,6 +411,8 @@ func (p *AssignExpr) Resolve(indexed map[string]*Package) error {
 
 // CallExpr represents giving Call loop.
 type CallExpr struct {
+	Commentaries
+
 	Location
 }
 
@@ -424,6 +428,8 @@ func (p *CallExpr) Resolve(indexed map[string]*Package) error {
 
 // RangeExpr represents giving Range loop.
 type RangeExpr struct {
+	Commentaries
+
 	Location
 }
 
@@ -439,6 +445,8 @@ func (p *RangeExpr) Resolve(indexed map[string]*Package) error {
 
 // ForExpr represents giving for loop.
 type ForExpr struct {
+	Commentaries
+
 	Location
 }
 
@@ -455,6 +463,8 @@ func (p *ForExpr) Resolve(indexed map[string]*Package) error {
 // SymbolExpr represents giving char expression like Bracket, + , -
 // symbols used in code.
 type SymbolExpr struct {
+	Commentaries
+
 	Location
 
 	// Symbol contains symbol expression rune which is represented by
@@ -475,6 +485,8 @@ func (p *SymbolExpr) Resolve(indexed map[string]*Package) error {
 // PropertyCallExpr represents giving char expression like Bracket, + , -
 // PropertyCalls used in code.
 type PropertyCallExpr struct {
+	Commentaries
+
 	Location
 }
 
@@ -491,6 +503,8 @@ func (p *PropertyCallExpr) Resolve(indexed map[string]*Package) error {
 // IfExpr represents giving char expression like Bracket, + , -
 // Ifs used in code.
 type IfExpr struct {
+	Commentaries
+
 	Location
 }
 
@@ -509,6 +523,8 @@ func (p *IfExpr) Resolve(indexed map[string]*Package) error {
 // any syntax error within a declaration like a struct, interface
 // or the body of a function.
 type BadExpr struct {
+	Commentaries
+
 	Location
 }
 
@@ -519,6 +535,254 @@ func (p BadExpr) ID() string {
 
 // Resolve implements Resolvable interface.
 func (p *BadExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// KeyPair represents a key-value pair declaration.
+type KeyPair struct {
+	Commentaries
+
+	// Key defines the key name used for giving key pair.
+	Key string
+
+	// Value represents type and value associated with key pair.
+	Value Identity
+}
+
+// ID implements Identity.
+func (p KeyPair) ID() string {
+	return "KeyPair"
+}
+
+// Resolve implements Resolvable interface.
+func (p *KeyPair) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// Map embodies a giving map type with
+// an associated name, value and key type.
+type Map struct {
+	Commentaries
+
+	// KeyPairs contains possible associated key-value elements provided
+	// to type for declarations where type has provided values.
+	KeyPairs []KeyPair
+
+	// Name represents the name of giving interface.
+	Name string
+
+	// Exported is used to indicate if type is exported or not.
+	Exported bool
+
+	// KeyType sets the key type for giving map type.
+	KeyType Identity
+
+	// ValueType sets the value type for giving map type.
+	ValueType Identity
+
+	// resolver provides a means of the indexer to provide a custom resolving
+	// function which will run internal logic to set giving values
+	// appropriately during resolution of types.
+	resolver ResolverFn
+}
+
+// ID implements Identity interface.
+func (p Map) ID() string {
+	return p.Name
+}
+
+// Resolve takes the list of indexed packages to internal structures
+// to resolve imported or internal types that they Pathwayerence. This is
+// used to ensure all package structures have direct link to parsed
+// type.
+func (p *Map) Resolve(indexed map[string]*Package) error {
+	if p.resolver != nil {
+		if err := p.resolver(indexed); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// List embodies a giving slice or array type with
+// an associated name and type.
+type List struct {
+	Commentaries
+
+	// IsSlice indicates if giving type is a slice or array type.
+	IsSlice bool
+
+	// Name represents the name of giving interface.
+	Name string
+
+	// Length defines giving length associated with slice or array.
+	Length int64
+
+	// Exported is used to indicate if type is exported or not.
+	Exported bool
+
+	// Values contains possible associated value elements provided
+	// to type for declarations where type has provided values.
+	Values []Identity
+
+	// Type sets the value object/declared type.
+	Type Identity
+
+	// Meta provides associated package  and commentary information related to
+	// giving type.
+	Meta Meta
+
+	// resolver provides a means of the indexer to provide a custom resolving
+	// function which will run internal logic to set giving values
+	// appropriately during resolution of types.
+	resolver ResolverFn
+}
+
+// ID implements Identity interface.
+func (p List) ID() string {
+	return p.Name
+}
+
+// Resolve takes the list of indexed packages to internal structures
+// to resolve imported or internal types that they Pathwayerence. This is
+// used to ensure all package structures have direct link to parsed
+// type.
+func (p *List) Resolve(indexed map[string]*Package) error {
+	if p.resolver != nil {
+		if err := p.resolver(indexed); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Channel embodies a channel type declared
+// with a golang package.
+type Channel struct {
+	Commentaries
+
+	// Name represents the name of giving interface.
+	Name string
+
+	// Exported is used to indicate if type is exported or not.
+	Exported bool
+
+	// Type sets the value object/declared type.
+	Type Identity
+
+	// resolver provides a means of the indexer to provide a custom resolving
+	// function which will run internal logic to set giving values
+	// appropriately during resolution of types.
+	resolver ResolverFn
+}
+
+// ID implements Identity interface.
+func (p Channel) ID() string {
+	return p.Name
+}
+
+// Resolve takes the list of indexed packages to internal structures
+// to resolve imported or internal types that they Pathwayerence. This is
+// used to ensure all package structures have direct link to parsed
+// type.
+func (p *Channel) Resolve(indexed map[string]*Package) error {
+	if p.resolver != nil {
+		if err := p.resolver(indexed); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Base represents a golang base types which include
+// strings, int types, floats, complex, etc, which are
+// atomic indivisible types.
+type Base struct {
+	Commentaries
+
+	// Name represents the name of giving type.
+	Name string
+
+	// Value contains associated value of giving base type if
+	// is a variable.
+	Value string
+}
+
+// BaseFor returns a new instance of Base using provided Name.
+func BaseFor(baseName string) Base {
+	return Base{
+		Name: baseName,
+	}
+}
+
+// BaseWith returns a new instance of Base using provided Name and value.
+func BaseWith(baseName string, value string) Base {
+	return Base{
+		Value: value,
+		Name:  baseName,
+	}
+}
+
+// ID implements the Identity interface.
+func (p Base) ID() string {
+	return p.Name
+}
+
+// Resolve takes the list of indexed packages to internal structures
+// to resolve imported or internal types that they Pathwayerence. This is
+// used to ensure all package structures have direct link to parsed
+// type.
+func (p *Base) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// Variable embodies data related to declared
+// variable.
+type Variable struct {
+	Pathway
+	Location
+	Commentaries
+
+	// Type sets the value object/declared type.
+	Type Identity
+
+	// Name represents the name of giving interface.
+	Name string
+
+	// Exported is used to indicate if type is exported or not.
+	Exported bool
+
+	// Constant is used to flag giving variable as a go const
+	// i.e preceded with a const keyword or part of a const block.
+	Constant bool
+
+	// Blank is used to indicate if variable name is blank.
+	Blank bool
+
+	// IsShortHand is used to indicate if variable is declared
+	// in golang short hand or normal format.
+	IsShortHand bool
+
+	// Meta provides associated package  and commentary information related to
+	// giving type.
+	Meta Meta
+
+	// resolver provides a means of the indexer to provide a custom resolving
+	// function which will run internal logic to set giving values
+	// appropriately during resolution of types.
+	resolver ResolverFn
+}
+
+// Resolve takes the list of indexed packages to internal structures
+// to resolve imported or internal types that they Pathwayerence. This is
+// used to ensure all package structures have direct link to parsed
+// type.
+func (p *Variable) Resolve(indexed map[string]*Package) error {
+	if p.resolver != nil {
+		if err := p.resolver(indexed); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -615,258 +879,6 @@ func (p Parameter) ID() string {
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Parameter) Resolve(indexed map[string]*Package) error {
-	if p.resolver != nil {
-		if err := p.resolver(indexed); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// Map embodies a giving map type with
-// an associated name, value and key type.
-type Map struct {
-	Pathway
-	Location
-	Commentaries
-
-	// Values contains possible associated key-value elements provided
-	// to type for declarations where type has provided values.
-	Values map[Identity]Identity
-
-	// Name represents the name of giving interface.
-	Name string
-
-	// Exported is used to indicate if type is exported or not.
-	Exported bool
-
-	// KeyType sets the key type for giving map type.
-	KeyType Identity
-
-	// ValueType sets the value type for giving map type.
-	ValueType Identity
-
-	// Meta provides associated package  and commentary information related to
-	// giving type.
-	Meta Meta
-
-	// resolver provides a means of the indexer to provide a custom resolving
-	// function which will run internal logic to set giving values
-	// appropriately during resolution of types.
-	resolver ResolverFn
-}
-
-// ID implements Identity interface.
-func (p Map) ID() string {
-	return p.Name
-}
-
-// Resolve takes the list of indexed packages to internal structures
-// to resolve imported or internal types that they Pathwayerence. This is
-// used to ensure all package structures have direct link to parsed
-// type.
-func (p *Map) Resolve(indexed map[string]*Package) error {
-	if p.resolver != nil {
-		if err := p.resolver(indexed); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// List embodies a giving slice or array type with
-// an associated name and type.
-type List struct {
-	Pathway
-	Location
-	Commentaries
-
-	// IsSlice indicates if giving type is a slice or array type.
-	IsSlice bool
-
-	// Name represents the name of giving interface.
-	Name string
-
-	// Length defines giving length associated with slice or array.
-	Length int64
-
-	// Exported is used to indicate if type is exported or not.
-	Exported bool
-
-	// Values contains possible associated value elements provided
-	// to type for declarations where type has provided values.
-	Values []Identity
-
-	// Type sets the value object/declared type.
-	Type Identity
-
-	// Meta provides associated package  and commentary information related to
-	// giving type.
-	Meta Meta
-
-	// resolver provides a means of the indexer to provide a custom resolving
-	// function which will run internal logic to set giving values
-	// appropriately during resolution of types.
-	resolver ResolverFn
-}
-
-// ID implements Identity interface.
-func (p List) ID() string {
-	return p.Name
-}
-
-// Resolve takes the list of indexed packages to internal structures
-// to resolve imported or internal types that they Pathwayerence. This is
-// used to ensure all package structures have direct link to parsed
-// type.
-func (p *List) Resolve(indexed map[string]*Package) error {
-	if p.resolver != nil {
-		if err := p.resolver(indexed); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// Channel embodies a channel type declared
-// with a golang package.
-type Channel struct {
-	Pathway
-	Location
-	Commentaries
-
-	// Name represents the name of giving interface.
-	Name string
-
-	// Exported is used to indicate if type is exported or not.
-	Exported bool
-
-	// Meta provides associated package  and commentary information related to
-	// giving type.
-	Meta Meta
-
-	// Type sets the value object/declared type.
-	Type Identity
-
-	// resolver provides a means of the indexer to provide a custom resolving
-	// function which will run internal logic to set giving values
-	// appropriately during resolution of types.
-	resolver ResolverFn
-}
-
-// ID implements Identity interface.
-func (p Channel) ID() string {
-	return p.Name
-}
-
-// Resolve takes the list of indexed packages to internal structures
-// to resolve imported or internal types that they Pathwayerence. This is
-// used to ensure all package structures have direct link to parsed
-// type.
-func (p *Channel) Resolve(indexed map[string]*Package) error {
-	if p.resolver != nil {
-		if err := p.resolver(indexed); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// Variable embodies data related to declared
-// variable.
-type Variable struct {
-	Pathway
-	Location
-	Commentaries
-
-	// Type sets the value object/declared type.
-	Type Identity
-
-	// Name represents the name of giving interface.
-	Name string
-
-	// Exported is used to indicate if type is exported or not.
-	Exported bool
-
-	// Constant is used to flag giving variable as a go const
-	// i.e preceded with a const keyword or part of a const block.
-	Constant bool
-
-	// Blank is used to indicate if variable name is blank.
-	Blank bool
-
-	// IsShortHand is used to indicate if variable is declared
-	// in golang short hand or normal format.
-	IsShortHand bool
-
-	// Meta provides associated package  and commentary information related to
-	// giving type.
-	Meta Meta
-
-	// Value contains associated type containing giving value claim for
-	// giving variable.
-	Value Identity
-
-	// resolver provides a means of the indexer to provide a custom resolving
-	// function which will run internal logic to set giving values
-	// appropriately during resolution of types.
-	resolver ResolverFn
-}
-
-// Resolve takes the list of indexed packages to internal structures
-// to resolve imported or internal types that they Pathwayerence. This is
-// used to ensure all package structures have direct link to parsed
-// type.
-func (p *Variable) Resolve(indexed map[string]*Package) error {
-	if p.resolver != nil {
-		if err := p.resolver(indexed); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// Base represents a golang base types which include
-// strings, int types, floats, complex, etc, which are
-// atomic indivisible types.
-type Base struct {
-	Pathway
-	Location
-	Commentaries
-
-	// Value contains associated value of giving base type if
-	// is a variable.
-	Value string
-
-	// Name represents the name of giving type.
-	Name string
-
-	// Exported is used to indicate if type is exported or not.
-	Exported bool
-
-	// Type sets the value object/declared type.
-	Type Identity
-
-	// Meta provides associated package  and commentary information related to
-	// giving type.
-	Meta Meta
-
-	// resolver provides a means of the indexer to provide a custom resolving
-	// function which will run internal logic to set giving values
-	// appropriately during resolution of types.
-	resolver ResolverFn
-}
-
-// ID implements the Identity interface.
-func (p *Base) ID() string {
-	return p.Name
-}
-
-// Resolve takes the list of indexed packages to internal structures
-// to resolve imported or internal types that they Pathwayerence. This is
-// used to ensure all package structures have direct link to parsed
-// type.
-func (p *Base) Resolve(indexed map[string]*Package) error {
 	if p.resolver != nil {
 		if err := p.resolver(indexed); err != nil {
 			return err
