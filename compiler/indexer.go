@@ -415,7 +415,7 @@ func (b *ParseScope) handleStruct(ctx context.Context, str *ast.StructType, ty *
 	declr.Fields = map[string]Field{}
 	declr.Embeds = map[string]*Struct{}
 	declr.Composes = map[string]*Interface{}
-	declr.Location = b.getLocation(spec.Pos(), spec.End())
+	declr.Location = b.getLocation(ty.Pos(), ty.End())
 
 	if gen.Doc != nil {
 		b.comments[gen.Doc] = struct{}{}
@@ -493,7 +493,7 @@ func (b *ParseScope) handleInterface(ctx context.Context, str *ast.InterfaceType
 
 	declr.Methods = map[string]Function{}
 	declr.Composes = map[string]*Interface{}
-	declr.Location = b.getLocation(spec.Pos(), spec.End())
+	declr.Location = b.getLocation(ty.Pos(), ty.End())
 
 	if gen.Doc != nil {
 		b.comments[gen.Doc] = struct{}{}
@@ -568,7 +568,7 @@ func (b *ParseScope) handleInterface(ctx context.Context, str *ast.InterfaceType
 
 func (b *ParseScope) handleNamedType(ctx context.Context, ty *ast.TypeSpec, spec ast.Spec, gen *ast.GenDecl, in chan interface{}) error {
 	var declr Type
-	declr.Location = b.getLocation(spec.Pos(), spec.End())
+	declr.Location = b.getLocation(ty.Pos(), ty.End())
 
 	if gen.Doc != nil {
 		b.comments[gen.Doc] = struct{}{}
@@ -1228,24 +1228,32 @@ func (b *ParseScope) getImport(aliasName string) (Import, error) {
 }
 
 func (b *ParseScope) getTypeFromTypeSpecExpr(t *ast.TypeSpec, e ast.Expr, others map[string]*Package) (Identity, Meta, error) {
-	fmt.Printf("GetTypeFromTypeSpec: %#v -> %#v\n\n", t, e)
+	//fmt.Printf("GetTypeFromTypeSpec: %#v -> %#v\n\n", t, e)
 	var meta Meta
 	return nil, meta, nil
 }
 
 func (b *ParseScope) getTypeFromFieldExpr(f *ast.Field, e ast.Expr, others map[string]*Package) (Identity, Meta, error) {
-	fmt.Printf("GetTypeFromField: %#v -> %#v\n\n", f, e)
+	//fmt.Printf("GetTypeFromField: %#v -> %#v\n\n", f, e)
 	var meta Meta
 	return nil, meta, nil
 }
 
 func (b *ParseScope) getTypeFromValueExpr(f *ast.Ident, v *ast.ValueSpec, others map[string]*Package) (Identity, Meta, error) {
-	fmt.Printf("GetTypeFromValue: %#v -> %#v\n\n", f, v)
+	fmt.Printf("GetTypeFromValue: %#v -> %#v\n", f, v)
+	fmt.Printf("GetType::Type: %#v -> \n\n", v.Type)
+	//fmt.Printf("GetType::Values: %#v -> \n\n", v.Values)
+
 	var meta Meta
 	return nil, meta, nil
 }
 
 func (b *ParseScope) findTypeInPackages(f *ast.Ident, e ast.Expr, others map[string]*Package) (Identity, error) {
+
+	return nil, nil
+}
+
+func (b *ParseScope) transformType(f interface{}, others map[string]*Package) (Identity, error) {
 
 	return nil, nil
 }

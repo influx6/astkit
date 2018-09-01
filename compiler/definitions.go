@@ -1,8 +1,9 @@
 package compiler
 
 import (
-	"fmt"
+	"strings"
 
+	"github.com/gokit/errors"
 	"golang.org/x/tools/go/loader"
 )
 
@@ -23,12 +24,24 @@ type Identity interface {
 	ID() string
 }
 
+// GeoCoordinates defines a interface which returns a Location object
+// representing area (i.e declared location, line, column, etc)
+// of implementing type.
+type GeoCoordinates interface {
+	Coordinates() *Location
+}
+
+// Address defines interface with exposed method to get
+// Address of giving declared type.
+type Address interface {
+	Addr() string
+}
+
 // Expr defines a interface exposing a giving method.
 type Expr interface {
+	Address
 	Resolvable
-
-	Ref() string
-	Loc() *Location
+	GeoCoordinates
 }
 
 // ResolverFn defines a function type representing
@@ -51,8 +64,8 @@ type Location struct {
 	Source    string
 }
 
-// Loc implements the Expr interface.
-func (l Location) Loc() Location {
+// Coordinates implements the Expr interface.
+func (l *Location) Coordinates() *Location {
 	return l
 }
 
@@ -61,8 +74,8 @@ type Pathway struct {
 	Path string
 }
 
-// Ref implements the Expr interface and returns the vale of Pathway.Path field.
-func (f Pathway) Ref() string {
+// Addr implements the Expr interface and returns the vale of Pathway.Path field.
+func (f Pathway) Addr() string {
 	return f.Path
 }
 
@@ -93,6 +106,16 @@ type Annotation struct {
 	After    []string
 	Flags    []string
 	Params   map[string]string
+}
+
+// ID implements Identity.
+func (p Annotation) ID() string {
+	return p.Name
+}
+
+// Resolve implements Resolvable interface.
+func (p *Annotation) Resolve(indexed map[string]*Package) error {
+	return nil
 }
 
 // Doc represents the associated documentation for
@@ -186,10 +209,82 @@ type Package struct {
 	Files      map[string]*PackageFile
 }
 
+// GetConstant attempts to return Constant reference declared in Package.
+func (p *Package) GetConstant(methodName string) (*Variable, error) {
+	points := []string{p.Name, methodName}
+	addr := strings.Join(points, ".")
+	if method, ok := p.Constants[addr]; ok {
+		return method, nil
+	}
+	return nil, errors.Wrap(ErrNotFound, "Constant with addrs %q not found", addr)
+}
+
+// GetVariable attempts to return Variable reference declared in Package.
+func (p *Package) GetVariable(methodName string) (*Variable, error) {
+	points := []string{p.Name, methodName}
+	addr := strings.Join(points, ".")
+	if method, ok := p.Variables[addr]; ok {
+		return method, nil
+	}
+	return nil, errors.Wrap(ErrNotFound, "Variable with addrs %q not found", addr)
+}
+
+// GetType attempts to return Type reference declared in Package.
+func (p *Package) GetType(methodName string) (*Type, error) {
+	points := []string{p.Name, methodName}
+	addr := strings.Join(points, ".")
+	if method, ok := p.Types[addr]; ok {
+		return method, nil
+	}
+	return nil, errors.Wrap(ErrNotFound, "Type with addrs %q not found", addr)
+}
+
+// GetStruct attempts to return Struct reference declared in Package.
+func (p *Package) GetStruct(methodName string) (*Struct, error) {
+	points := []string{p.Name, methodName}
+	addr := strings.Join(points, ".")
+	if method, ok := p.Structs[addr]; ok {
+		return method, nil
+	}
+	return nil, errors.Wrap(ErrNotFound, "Struct with addrs %q not found", addr)
+}
+
+// GetInterface attempts to return interface reference declared in Package.
+func (p *Package) GetInterface(methodName string) (*Interface, error) {
+	points := []string{p.Name, methodName}
+	addr := strings.Join(points, ".")
+	if method, ok := p.Interfaces[addr]; ok {
+		return method, nil
+	}
+	return nil, errors.Wrap(ErrNotFound, "Interface with addrs %q not found", addr)
+}
+
+// GetFunction attempts to return Function reference for giving package function declared
+// in Package, from Package.Functions dictionary.
+func (p *Package) GetFunctionFor(methodName string) (*Function, error) {
+	points := []string{p.Name, methodName}
+	addr := strings.Join(points, ".")
+	if method, ok := p.Functions[addr]; ok {
+		return method, nil
+	}
+	return nil, errors.Wrap(ErrNotFound, "function with addrs %q not found", addr)
+}
+
+// GetMethodFor attempts to return Function reference for giving method associated
+// with type from Package.Methods dictionary.
+func (p *Package) GetMethodFor(typeName string, methodName string) (*Function, error) {
+	points := []string{p.Name, typeName, methodName}
+	addr := strings.Join(points, ".")
+	if method, ok := p.Methods[addr]; ok {
+		return method, nil
+	}
+	return nil, errors.Wrap(ErrNotFound, "method with addrs %q not found", addr)
+}
+
 // Add adds giving declaration into package declaration
 // types according to it's class.
 func (p *Package) Add(obj interface{}) error {
-	fmt.Printf("Adding: %#v\n\n", obj)
+	//fmt.Printf("Adding: %#v\n\n", obj)
 	switch elem := obj.(type) {
 	case BadExpr:
 		p.BadDeclrs = append(p.BadDeclrs, elem)
@@ -198,16 +293,16 @@ func (p *Package) Add(obj interface{}) error {
 	case *Package:
 		p.Depends[elem.Name] = elem
 	case Type:
-		p.Types[elem.Ref()] = &elem
+		p.Types[elem.Addr()] = &elem
 	case Interface:
-		p.Interfaces[elem.Ref()] = &elem
+		p.Interfaces[elem.Addr()] = &elem
 	case Struct:
-		p.Structs[elem.Ref()] = &elem
+		p.Structs[elem.Addr()] = &elem
 	case Function:
 		if elem.IsMethod {
-			p.Methods[elem.Ref()] = &elem
+			p.Methods[elem.Addr()] = &elem
 		} else {
-			p.Functions[elem.Ref()] = &elem
+			p.Functions[elem.Addr()] = &elem
 		}
 	case Variable:
 		if elem.Blank {
@@ -222,16 +317,16 @@ func (p *Package) Add(obj interface{}) error {
 
 		p.Variables[elem.Name] = &elem
 	case *Type:
-		p.Types[elem.Ref()] = elem
+		p.Types[elem.Addr()] = elem
 	case *Interface:
-		p.Interfaces[elem.Ref()] = elem
+		p.Interfaces[elem.Addr()] = elem
 	case *Struct:
-		p.Structs[elem.Ref()] = elem
+		p.Structs[elem.Addr()] = elem
 	case *Function:
 		if elem.IsMethod {
-			p.Methods[elem.Ref()] = elem
+			p.Methods[elem.Addr()] = elem
 		} else {
-			p.Functions[elem.Ref()] = elem
+			p.Functions[elem.Addr()] = elem
 		}
 	case *Variable:
 		if elem.Blank {
@@ -279,6 +374,133 @@ func (p *Package) Resolve(indexed map[string]*Package) error {
 			return err
 		}
 	}
+	return nil
+}
+
+// ReturnsExpr represents giving Returns loop.
+type ReturnsExpr struct {
+	Location
+}
+
+// ID implements Identity.
+func (p ReturnsExpr) ID() string {
+	return "Returns"
+}
+
+// Resolve implements Resolvable interface.
+func (p *ReturnsExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// AssignExpr represents giving Assign loop.
+type AssignExpr struct {
+	Location
+}
+
+// ID implements Identity.
+func (p AssignExpr) ID() string {
+	return "Assign"
+}
+
+// Resolve implements Resolvable interface.
+func (p *AssignExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// CallExpr represents giving Call loop.
+type CallExpr struct {
+	Location
+}
+
+// ID implements Identity.
+func (p CallExpr) ID() string {
+	return "Call"
+}
+
+// Resolve implements Resolvable interface.
+func (p *CallExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// RangeExpr represents giving Range loop.
+type RangeExpr struct {
+	Location
+}
+
+// ID implements Identity.
+func (p RangeExpr) ID() string {
+	return "Range"
+}
+
+// Resolve implements Resolvable interface.
+func (p *RangeExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// ForExpr represents giving for loop.
+type ForExpr struct {
+	Location
+}
+
+// ID implements Identity.
+func (p ForExpr) ID() string {
+	return "for"
+}
+
+// Resolve implements Resolvable interface.
+func (p *ForExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// SymbolExpr represents giving char expression like Bracket, + , -
+// symbols used in code.
+type SymbolExpr struct {
+	Location
+
+	// Symbol contains symbol expression rune which is represented by
+	// giving Symbol.
+	Symbol rune
+}
+
+// ID implements Identity.
+func (p SymbolExpr) ID() string {
+	return string(p.Symbol)
+}
+
+// Resolve implements Resolvable interface.
+func (p *SymbolExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// PropertyCallExpr represents giving char expression like Bracket, + , -
+// PropertyCalls used in code.
+type PropertyCallExpr struct {
+	Location
+}
+
+// ID implements Identity.
+func (p PropertyCallExpr) ID() string {
+	return "PropertyCall"
+}
+
+// Resolve implements Resolvable interface.
+func (p *PropertyCallExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// IfExpr represents giving char expression like Bracket, + , -
+// Ifs used in code.
+type IfExpr struct {
+	Location
+}
+
+// ID implements Identity.
+func (p IfExpr) ID() string {
+	return "if"
+}
+
+// Resolve implements Resolvable interface.
+func (p *IfExpr) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
@@ -334,6 +556,11 @@ type Field struct {
 	resolver ResolverFn
 }
 
+// ID implements Identity interface.
+func (p Field) ID() string {
+	return p.Name
+}
+
 // Resolve takes the list of indexed packages to internal structures
 // to resolve imported or internal types that they Pathwayerence. This is
 // used to ensure all package structures have direct link to parsed
@@ -378,6 +605,11 @@ type Parameter struct {
 	resolver ResolverFn
 }
 
+// ID implements Identity interface.
+func (p Parameter) ID() string {
+	return p.Name
+}
+
 // Resolve takes the list of indexed packages to internal structures
 // to resolve imported or internal types that they Pathwayerence. This is
 // used to ensure all package structures have direct link to parsed
@@ -397,6 +629,10 @@ type Map struct {
 	Pathway
 	Location
 	Commentaries
+
+	// Values contains possible associated key-value elements provided
+	// to type for declarations where type has provided values.
+	Values map[Identity]Identity
 
 	// Name represents the name of giving interface.
 	Name string
@@ -418,6 +654,11 @@ type Map struct {
 	// function which will run internal logic to set giving values
 	// appropriately during resolution of types.
 	resolver ResolverFn
+}
+
+// ID implements Identity interface.
+func (p Map) ID() string {
+	return p.Name
 }
 
 // Resolve takes the list of indexed packages to internal structures
@@ -452,6 +693,10 @@ type List struct {
 	// Exported is used to indicate if type is exported or not.
 	Exported bool
 
+	// Values contains possible associated value elements provided
+	// to type for declarations where type has provided values.
+	Values []Identity
+
 	// Type sets the value object/declared type.
 	Type Identity
 
@@ -463,6 +708,11 @@ type List struct {
 	// function which will run internal logic to set giving values
 	// appropriately during resolution of types.
 	resolver ResolverFn
+}
+
+// ID implements Identity interface.
+func (p List) ID() string {
+	return p.Name
 }
 
 // Resolve takes the list of indexed packages to internal structures
@@ -502,6 +752,11 @@ type Channel struct {
 	// function which will run internal logic to set giving values
 	// appropriately during resolution of types.
 	resolver ResolverFn
+}
+
+// ID implements Identity interface.
+func (p Channel) ID() string {
+	return p.Name
 }
 
 // Resolve takes the list of indexed packages to internal structures
@@ -548,6 +803,10 @@ type Variable struct {
 	// giving type.
 	Meta Meta
 
+	// Value contains associated type containing giving value claim for
+	// giving variable.
+	Value Identity
+
 	// resolver provides a means of the indexer to provide a custom resolving
 	// function which will run internal logic to set giving values
 	// appropriately during resolution of types.
@@ -574,6 +833,10 @@ type Base struct {
 	Pathway
 	Location
 	Commentaries
+
+	// Value contains associated value of giving base type if
+	// is a variable.
+	Value string
 
 	// Name represents the name of giving type.
 	Name string

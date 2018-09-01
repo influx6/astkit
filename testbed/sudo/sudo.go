@@ -20,6 +20,8 @@ var _ string = "Rico"
 
 var ui int = 300
 
+var mui = ui
+
 var fu = func(string) {}
 
 // variables
