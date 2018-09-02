@@ -60,6 +60,8 @@ var (
 
 	nik = func() {}
 
+	dih = hji()
+
 	riz = map[string]string{}
 
 	riz2 map[string]string = map[string]string{
@@ -91,6 +93,10 @@ var (
 	wilto = []map[string]tokens.Pos{}
 	Willt = map[string]interface{}{}
 )
+
+func hji() bool {
+	return false
+}
 
 type RuL api.Rx
 

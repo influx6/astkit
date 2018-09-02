@@ -1,5 +1,13 @@
+github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
+github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/gokit/errors v0.0.0-20180722071056-f3491799719a h1:AsdGXNlfPAXRhXEWRw+ZmOBgMv4pT6MiKXQW4WOnyn8=
 github.com/gokit/errors v0.0.0-20180722071056-f3491799719a/go.mod h1:ipykB/QrFXRTDj7gnqpIPJGoH8TN0FRQqAuKUUOZg9E=
+github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
+github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
+github.com/stretchr/testify v1.2.2 h1:bSDNvY7ZPG5RlJ8otE/7V6gMiyenm9RtJ7IUVIAoJ1w=
+github.com/stretchr/testify v1.2.2/go.mod h1:a8OnRcib4nhh0OaRAV+Yts87kKdq0PP7pXfy6kDkUVs=
+gitlab.com/gokit/errors v0.0.0-20180722071056-f3491799719a h1:Km/3dByFRbEUMafKKqV/wGTyGgPbjJyeKteVcExiI14=
+gitlab.com/gokit/errors v0.0.0-20180722071056-f3491799719a/go.mod h1:yQGl6kmQpjm4TXaXOFJPOR2evgApKxc7c0Id/V9mL8U=
 golang.org/x/net v0.0.0-20180824152047-4bcd98cce591 h1:4S2XUgvg3hUNTvxI307qkFPb9zKHG3Nf9TXFzX/DZZI=
 golang.org/x/net v0.0.0-20180824152047-4bcd98cce591/go.mod h1:mL1N/T3taQHkDXs73rZJwtUhF3w3ftmwwsq0BUmARs4=
 golang.org/x/sync v0.0.0-20180314180146-1d60e4601c6f h1:wMNYb4v58l5UBM7MYRLPG6ZhfOqbKu7X5eyFl8ZhKvA=

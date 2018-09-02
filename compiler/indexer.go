@@ -220,9 +220,9 @@ func (b *ParseScope) Parse(ctx context.Context, in chan interface{}) error {
 		b.comments = map[*ast.CommentGroup]struct{}{}
 	}
 
-	//if err := b.handleImports(ctx, in); err != nil {
-	//	return err
-	//}
+	if err := b.handleImports(ctx, in); err != nil {
+		return err
+	}
 
 	// Parse all structures first, ensuring to add them into package.
 	for _, declr := range b.File.Decls {
@@ -331,12 +331,12 @@ func (b *ParseScope) handleImports(ctx context.Context, in chan interface{}) err
 
 		// Index imported separately, has resolution of
 		// references will happen later after indexing.
-		pkg, err := b.Indexer.indexImported(ctx, imp.Path)
-		if err != nil {
-			return err
-		}
+		//pkg, err := b.Indexer.indexImported(ctx, imp.Path)
+		//if err != nil {
+		//	return err
+		//}
 
-		in <- pkg
+		//in <- pkg
 	}
 	return nil
 }
@@ -616,9 +616,9 @@ func (b *ParseScope) handleNamedType(ctx context.Context, ty *ast.TypeSpec, spec
 
 	obj := b.Info.ObjectOf(ty.Name)
 
-	fmt.Printf("TypeSpec: %#v\n", ty)
-	fmt.Printf("TypeObj: %#v\n", obj)
-	fmt.Printf("TypeObj: %#v\n", obj.Type())
+	fmt.Printf("TypeSpec[%q]: %#v\n", ty.Name.Name, ty)
+	fmt.Printf("TypeObj[%q]: %#v\n", ty.Name.Name, obj.Pkg())
+	fmt.Printf("TypeObjType[%q]: %#v\n\n", ty.Name.Name, obj.Type())
 
 	declr.Exported = obj.Exported()
 	declr.Meta.Name = obj.Pkg().Name()
@@ -627,12 +627,24 @@ func (b *ParseScope) handleNamedType(ctx context.Context, ty *ast.TypeSpec, spec
 
 	declrAddr := &declr
 	declr.resolver = func(others map[string]*Package) error {
+		// If we are dealing with a selector expression, most
+		// probably it's calling external type from external package
+		// we need to secure type name.
+		if sel, ok := ty.Type.(*ast.SelectorExpr); ok {
+			meta, err := b.transformSelectExprToMeta(sel, others)
+			if err != nil {
+				return err
+			}
+
+			declrAddr.Meta = meta
+		}
+
 		vType, err := b.getTypeFromTypeSpecExpr(ty, ty.Type, others)
 		if err != nil {
 			return err
 		}
 
-		declrAddr.Type = vType
+		declrAddr.Points = vType
 		return nil
 	}
 
@@ -1007,6 +1019,18 @@ func (b *ParseScope) handleField(ownerName string, f *ast.Field, t ast.Expr) (Fi
 
 	pAddr := &p
 	p.resolver = func(others map[string]*Package) error {
+		// If we are dealing with a selector expression, most
+		// probably it's calling external type from external package
+		// we need to secure type name.
+		if sel, ok := t.(*ast.SelectorExpr); ok {
+			meta, err := b.transformSelectExprToMeta(sel, others)
+			if err != nil {
+				return err
+			}
+
+			pAddr.Meta = meta
+		}
+
 		tl, err := b.getTypeFromFieldExpr(f, t, others)
 		if err != nil {
 			return err
@@ -1055,6 +1079,18 @@ func (b *ParseScope) handleFieldWithName(ownerName string, f *ast.Field, nm *ast
 	pAddr := &p
 
 	p.resolver = func(others map[string]*Package) error {
+		// If we are dealing with a selector expression, most
+		// probably it's calling external type from external package
+		// we need to secure type name.
+		if sel, ok := t.(*ast.SelectorExpr); ok {
+			meta, err := b.transformSelectExprToMeta(sel, others)
+			if err != nil {
+				return err
+			}
+
+			pAddr.Meta = meta
+		}
+
 		tl, err := b.getTypeFromFieldExpr(f, t, others)
 		if err != nil {
 			return err
@@ -1107,6 +1143,18 @@ func (b *ParseScope) handleParameter(fnName string, f *ast.Field, t ast.Expr) (P
 	}
 
 	p.resolver = func(others map[string]*Package) error {
+		// If we are dealing with a selector expression, most
+		// probably it's calling external type from external package
+		// we need to secure type name.
+		if sel, ok := t.(*ast.SelectorExpr); ok {
+			meta, err := b.transformSelectExprToMeta(sel, others)
+			if err != nil {
+				return err
+			}
+
+			pAddr.Meta = meta
+		}
+
 		tl, err := b.getTypeFromFieldExpr(f, t, others)
 		if err != nil {
 			return err
@@ -1163,6 +1211,18 @@ func (b *ParseScope) handleParameterWithName(fnName string, f *ast.Field, nm *as
 	}
 
 	p.resolver = func(others map[string]*Package) error {
+		// If we are dealing with a selector expression, most
+		// probably it's calling external type from external package
+		// we need to secure type name.
+		if sel, ok := t.(*ast.SelectorExpr); ok {
+			meta, err := b.transformSelectExprToMeta(sel, others)
+			if err != nil {
+				return err
+			}
+
+			pAddr.Meta = meta
+		}
+
 		tl, err := b.getTypeFromFieldExpr(f, t, others)
 		if err != nil {
 			return err
@@ -1310,6 +1370,7 @@ func (b *ParseScope) getTypeFromValueExpr(f *ast.Ident, val ast.Expr, v *ast.Val
 		geoClone.Clone(lm)
 	}
 
+	fmt.Printf("Val[%q]: %#v \n", f.Name, val)
 	fmt.Printf("GetTo[%q]: %#v \n\n", f.Name, base)
 	return b.processValues(base, val, v, others)
 }
@@ -1325,7 +1386,7 @@ func (b *ParseScope) processValues(owner Identity, value interface{}, cave *ast.
 		case *ast.BasicLit:
 			rbase.Value = vt.Value
 		default:
-			return nil, errors.New("invalid type for value expected *ast.Ident")
+			//return nil, errors.New("invalid type for value expected *ast.Ident")
 		}
 
 		return rbase, nil
@@ -1344,37 +1405,53 @@ func (b *ParseScope) findTypeInPackages(e interface{}, others map[string]*Packag
 	case *types.Basic:
 		return BaseFor(core.Name()), nil
 	case *ast.BasicLit:
+		return b.transformBasicLit(core, others)
 	case *ast.CallExpr:
+		return b.transformCallExpr(core, others)
 	case *ast.CompositeLit:
+		return b.transformCompositeLit(core, others)
 	case *ast.StarExpr:
+		return b.transformStarExpr(core, others)
 	case *ast.UnaryExpr:
+		return b.transformUnaryExpr(core, others)
 	case *ast.SelectorExpr:
 		return b.transformSelectorExpr(core, others)
 	case *ast.IndexExpr:
+		return b.transformIndexExpr(core, others)
 	case *types.Named:
+		return b.transformNamed(core, others)
 	case *types.Slice:
-		return &List{}, nil
+		return b.transformSlice(core, others)
 	case *types.Array:
-		return &List{}, nil
+		return b.transformArray(core, others)
+	case *types.Pointer:
+		return b.transformPointer(core, others)
 	case *ast.ArrayType:
-		return &List{}, nil
+		return b.transformArrayType(core, others)
 	case *ast.FuncLit:
+		return b.transformFuncLit(core, others)
 	case *ast.ParenExpr:
+		return b.transformParentExpr(core, others)
 	case *ast.MapType:
-		return &Map{}, nil
+		return b.transformMapType(core, others)
 	case *types.Map:
-		return &Map{}, nil
+		return b.transformMap(core, others)
 	case *ast.SliceExpr:
-		return &List{}, nil
+		return b.transformSliceExpr(core, others)
 	case *ast.ChanType:
-		return &Channel{}, nil
+		return b.transformChanType(core, others)
 	case *types.Chan:
-		return &Channel{}, nil
+		return b.transformChan(core, others)
 	case *ast.KeyValueExpr:
+		return b.transformKeyValueExpr(core, others)
 	case *types.Signature:
-		return &CallExpr{}, nil
+		return b.transformSignature(core, others)
 	case *ast.BinaryExpr:
-	case *ast.InterfaceType:
+		return b.transformBinaryExpr(core, others)
+	case *types.Struct:
+		return b.transformStruct(core, others)
+	case *types.Interface:
+		return b.transformInterface(core, others)
 	}
 
 	return nil, errors.Wrap(ErrNotFound, "unable to find type")
@@ -1382,7 +1459,15 @@ func (b *ParseScope) findTypeInPackages(e interface{}, others map[string]*Packag
 
 func (b *ParseScope) transformIdent(e *ast.Ident, others map[string]*Package) (Identity, error) {
 	obj := b.Info.ObjectOf(e)
-	return b.findTypeInPackages(obj.Type(), others)
+	if e.Obj == nil {
+		return b.findTypeInPackages(obj.Type(), others)
+	}
+	return &Base{}, nil
+}
+
+func (b *ParseScope) transformFuncLit(e *ast.FuncLit, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
 }
 
 func (b *ParseScope) transformCallExpr(e *ast.CallExpr, others map[string]*Package) (Identity, error) {
@@ -1632,6 +1717,26 @@ func (b *ParseScope) transformSelectorExpr(e *ast.SelectorExpr, others map[strin
 	fmt.Printf("SelExpr:Sel %#v -> %#v\n", e.Sel, selObj.Name())
 	fmt.Printf("SelExpr:Sel %#v -> %#v -> %#v\n", e.Sel, selObj.Type(), selObj.Pkg())
 	return &Type{}, nil
+}
+
+func (b *ParseScope) transformSelectExprToMeta(e *ast.SelectorExpr, others map[string]*Package) (Meta, error) {
+	var meta Meta
+
+	xref, ok := e.X.(*ast.Ident)
+	if !ok {
+		return meta, errors.New("ast.SelectorExpr should have X as *ast.Ident")
+	}
+
+	meta.Name = xref.Name
+
+	// We need to find specific import that uses giving name as import alias.
+	imp, ok := b.Package.Imports[xref.Name]
+	if !ok {
+		return meta, errors.New("unable to find import with alias %q", xref.Name)
+	}
+
+	meta.Path = imp.Path
+	return meta, nil
 }
 
 //******************************************************************************

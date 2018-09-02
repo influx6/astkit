@@ -972,8 +972,8 @@ type Type struct {
 	// giving type.
 	Meta Meta
 
-	// Type sets the value object/declared type.
-	Type Identity
+	// Points sets the real type which giving type declaration points to.
+	Points Identity
 
 	// Methods contains all function defined as methods attached to
 	// type instance.
