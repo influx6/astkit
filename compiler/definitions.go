@@ -31,6 +31,10 @@ type GeoCoordinates interface {
 	Coordinates() *Location
 }
 
+type cloneLocation interface {
+	Clone(Location)
+}
+
 // Address defines interface with exposed method to get
 // Address of giving declared type.
 type Address interface {
@@ -61,6 +65,11 @@ type Location struct {
 	Column    int
 	ColumnEnd int
 	Source    string
+}
+
+// Clone saves value of incoming Location as itself.
+func (l *Location) Clone(m Location) {
+	*l = m
 }
 
 // Coordinates implements the Expr interface.
@@ -137,12 +146,27 @@ type Meta struct {
 	Path string
 }
 
+type commentaryDocs interface {
+	SetDoc(Doc)
+	AddDoc(Doc)
+}
+
 // Commentaries defines a struct which embodies all comments and annotations
 // associated with a declaration.
 type Commentaries struct {
 	Doc         Doc
 	Docs        []Doc
 	Annotations []Annotation
+}
+
+// SetDoc sets giving doc as commentaries main Doc.
+func (c *Commentaries) SetDoc(doc Doc) {
+	c.Doc = doc
+}
+
+// AddDoc adds new document into list of Docs.
+func (c *Commentaries) AddDoc(doc Doc) {
+	c.Docs = append(c.Docs, doc)
 }
 
 // Import embodies an import declaration within a package
@@ -378,7 +402,6 @@ func (p *Package) Resolve(indexed map[string]*Package) error {
 // ReturnsExpr represents giving Returns loop.
 type ReturnsExpr struct {
 	Commentaries
-
 	Location
 }
 
@@ -395,7 +418,6 @@ func (p *ReturnsExpr) Resolve(indexed map[string]*Package) error {
 // AssignExpr represents giving Assign loop.
 type AssignExpr struct {
 	Commentaries
-
 	Location
 }
 
@@ -412,7 +434,6 @@ func (p *AssignExpr) Resolve(indexed map[string]*Package) error {
 // CallExpr represents giving Call loop.
 type CallExpr struct {
 	Commentaries
-
 	Location
 }
 
@@ -429,7 +450,6 @@ func (p *CallExpr) Resolve(indexed map[string]*Package) error {
 // RangeExpr represents giving Range loop.
 type RangeExpr struct {
 	Commentaries
-
 	Location
 }
 
@@ -446,7 +466,6 @@ func (p *RangeExpr) Resolve(indexed map[string]*Package) error {
 // ForExpr represents giving for loop.
 type ForExpr struct {
 	Commentaries
-
 	Location
 }
 
@@ -464,7 +483,6 @@ func (p *ForExpr) Resolve(indexed map[string]*Package) error {
 // symbols used in code.
 type SymbolExpr struct {
 	Commentaries
-
 	Location
 
 	// Symbol contains symbol expression rune which is represented by
@@ -486,7 +504,6 @@ func (p *SymbolExpr) Resolve(indexed map[string]*Package) error {
 // PropertyCalls used in code.
 type PropertyCallExpr struct {
 	Commentaries
-
 	Location
 }
 
@@ -504,7 +521,6 @@ func (p *PropertyCallExpr) Resolve(indexed map[string]*Package) error {
 // Ifs used in code.
 type IfExpr struct {
 	Commentaries
-
 	Location
 }
 
@@ -524,7 +540,6 @@ func (p *IfExpr) Resolve(indexed map[string]*Package) error {
 // or the body of a function.
 type BadExpr struct {
 	Commentaries
-
 	Location
 }
 
@@ -540,6 +555,7 @@ func (p *BadExpr) Resolve(indexed map[string]*Package) error {
 
 // KeyPair represents a key-value pair declaration.
 type KeyPair struct {
+	Location
 	Commentaries
 
 	// Key defines the key name used for giving key pair.
@@ -562,7 +578,11 @@ func (p *KeyPair) Resolve(indexed map[string]*Package) error {
 // Map embodies a giving map type with
 // an associated name, value and key type.
 type Map struct {
+	Location
 	Commentaries
+
+	// IsPointer indicates if giving variable type is a pointer.
+	IsPointer bool
 
 	// KeyPairs contains possible associated key-value elements provided
 	// to type for declarations where type has provided values.
@@ -607,7 +627,11 @@ func (p *Map) Resolve(indexed map[string]*Package) error {
 // List embodies a giving slice or array type with
 // an associated name and type.
 type List struct {
+	Location
 	Commentaries
+
+	// IsPointer indicates if giving variable type is a pointer.
+	IsPointer bool
 
 	// IsSlice indicates if giving type is a slice or array type.
 	IsSlice bool
@@ -656,10 +680,44 @@ func (p *List) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
+// ValueField represents a field declared with giving value
+// within a instantiated struct.
+type ValueField struct {
+	Commentaries
+	Location
+
+	// IsPointer indicates if giving variable type is a pointer.
+	IsPointer bool
+
+	// Name represents the name of giving interface.
+	Name string
+
+	// Exported is used to indicate if type is exported or not.
+	Exported bool
+
+	// Field sets the field which has giving value..
+	Field *Field
+
+	// Type sets the value object/declared type.
+	Value Identity
+
+	// Type sets the value object/declared type.
+	Type Identity
+
+	// resolver provides a means of the indexer to provide a custom resolving
+	// function which will run internal logic to set giving values
+	// appropriately during resolution of types.
+	resolver ResolverFn
+}
+
 // Channel embodies a channel type declared
 // with a golang package.
 type Channel struct {
 	Commentaries
+	Location
+
+	// IsPointer indicates if giving variable type is a pointer.
+	IsPointer bool
 
 	// Name represents the name of giving interface.
 	Name string
@@ -698,7 +756,11 @@ func (p *Channel) Resolve(indexed map[string]*Package) error {
 // strings, int types, floats, complex, etc, which are
 // atomic indivisible types.
 type Base struct {
+	Location
 	Commentaries
+
+	// IsPointer indicates if giving variable type is a pointer.
+	IsPointer bool
 
 	// Name represents the name of giving type.
 	Name string
@@ -709,15 +771,15 @@ type Base struct {
 }
 
 // BaseFor returns a new instance of Base using provided Name.
-func BaseFor(baseName string) Base {
-	return Base{
+func BaseFor(baseName string) *Base {
+	return &Base{
 		Name: baseName,
 	}
 }
 
 // BaseWith returns a new instance of Base using provided Name and value.
-func BaseWith(baseName string, value string) Base {
-	return Base{
+func BaseWith(baseName string, value string) *Base {
+	return &Base{
 		Value: value,
 		Name:  baseName,
 	}
@@ -745,6 +807,9 @@ type Variable struct {
 
 	// Type sets the value object/declared type.
 	Type Identity
+
+	// IsPointer indicates if giving variable type is a pointer.
+	IsPointer bool
 
 	// Name represents the name of giving interface.
 	Name string

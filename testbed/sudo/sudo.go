@@ -26,6 +26,7 @@ var _ float32 = 10
 var _ float64 = 10
 var _ complex64 = 10
 var _ complex128 = 10
+var _ api.Wilk = api.Wilk{}
 
 var ui int = 300
 
@@ -39,6 +40,10 @@ var (
 
 	_ = "Render"
 
+	piui = api.Wilk{
+		Name: "Whaterball",
+	}
+
 	mko chan struct{}
 
 	one, two, three, four = 1, 2, 3, 4
@@ -48,6 +53,8 @@ var (
 	twethen string = "Wikkileaks"
 
 	vikvi = make(chan struct{}, 0)
+
+	viji = &vikvi
 
 	vikvi2 chan struct{} = make(chan struct{}, 0)
 
@@ -84,6 +91,10 @@ var (
 	wilto = []map[string]tokens.Pos{}
 	Willt = map[string]interface{}{}
 )
+
+type RuL api.Rx
+
+type Kil api.Wilk
 
 type ListOfWiks []api.Rx
 

@@ -616,6 +616,10 @@ func (b *ParseScope) handleNamedType(ctx context.Context, ty *ast.TypeSpec, spec
 
 	obj := b.Info.ObjectOf(ty.Name)
 
+	fmt.Printf("TypeSpec: %#v\n", ty)
+	fmt.Printf("TypeObj: %#v\n", obj)
+	fmt.Printf("TypeObj: %#v\n", obj.Type())
+
 	declr.Exported = obj.Exported()
 	declr.Meta.Name = obj.Pkg().Name()
 	declr.Meta.Path = obj.Pkg().Path()
@@ -888,16 +892,20 @@ func (b *ParseScope) handleFunctionField(ownerName string, f *ast.Field, t ast.E
 
 	if f.Doc != nil {
 		b.comments[f.Doc] = struct{}{}
-		if doc, err := b.handleCommentGroup(f.Doc); err != nil {
-			p.Docs = append(p.Docs, doc)
+		doc, cerr := b.handleCommentGroup(f.Doc)
+		if cerr != nil {
+			return p, cerr
 		}
+		p.Docs = append(p.Docs, doc)
 	}
 
 	if f.Comment != nil {
 		b.comments[f.Comment] = struct{}{}
-		if doc, err := b.handleCommentGroup(f.Comment); err != nil {
-			p.Docs = append(p.Docs, doc)
+		doc, cerr := b.handleCommentGroup(f.Comment)
+		if cerr != nil {
+			return p, cerr
 		}
+		p.Docs = append(p.Docs, doc)
 	}
 
 	pAddr := &p
@@ -929,18 +937,20 @@ func (b *ParseScope) handleFunctionFieldWithName(ownerName string, f *ast.Field,
 
 	if f.Doc != nil {
 		b.comments[f.Doc] = struct{}{}
-		doc, err := b.handleCommentGroup(f.Doc)
-		if err != nil {
-			return p, err
+		doc, cerr := b.handleCommentGroup(f.Doc)
+		if cerr != nil {
+			return p, cerr
 		}
 		p.Docs = append(p.Docs, doc)
 	}
 
 	if f.Comment != nil {
 		b.comments[f.Comment] = struct{}{}
-		if doc, err := b.handleCommentGroup(f.Comment); err != nil {
-			p.Docs = append(p.Docs, doc)
+		doc, cerr := b.handleCommentGroup(f.Comment)
+		if cerr != nil {
+			return p, cerr
 		}
+		p.Docs = append(p.Docs, doc)
 	}
 
 	obj := b.Info.ObjectOf(nm)
@@ -979,16 +989,20 @@ func (b *ParseScope) handleField(ownerName string, f *ast.Field, t ast.Expr) (Fi
 
 	if f.Doc != nil {
 		b.comments[f.Doc] = struct{}{}
-		if doc, err := b.handleCommentGroup(f.Doc); err != nil {
-			p.Docs = append(p.Docs, doc)
+		doc, cerr := b.handleCommentGroup(f.Doc)
+		if cerr != nil {
+			return p, cerr
 		}
+		p.Docs = append(p.Docs, doc)
 	}
 
 	if f.Comment != nil {
 		b.comments[f.Comment] = struct{}{}
-		if doc, err := b.handleCommentGroup(f.Comment); err != nil {
-			p.Docs = append(p.Docs, doc)
+		doc, cerr := b.handleCommentGroup(f.Comment)
+		if cerr != nil {
+			return p, cerr
 		}
+		p.Docs = append(p.Docs, doc)
 	}
 
 	pAddr := &p
@@ -1015,16 +1029,20 @@ func (b *ParseScope) handleFieldWithName(ownerName string, f *ast.Field, nm *ast
 
 	if f.Doc != nil {
 		b.comments[f.Doc] = struct{}{}
-		if doc, err := b.handleCommentGroup(f.Doc); err != nil {
-			p.Docs = append(p.Docs, doc)
+		doc, cerr := b.handleCommentGroup(f.Doc)
+		if cerr != nil {
+			return p, cerr
 		}
+		p.Docs = append(p.Docs, doc)
 	}
 
 	if f.Comment != nil {
 		b.comments[f.Comment] = struct{}{}
-		if doc, err := b.handleCommentGroup(f.Comment); err != nil {
-			p.Docs = append(p.Docs, doc)
+		doc, cerr := b.handleCommentGroup(f.Comment)
+		if cerr != nil {
+			return p, cerr
 		}
+		p.Docs = append(p.Docs, doc)
 	}
 
 	obj := b.Info.ObjectOf(nm)
@@ -1054,16 +1072,20 @@ func (b *ParseScope) handleParameter(fnName string, f *ast.Field, t ast.Expr) (P
 
 	if f.Doc != nil {
 		b.comments[f.Doc] = struct{}{}
-		if doc, err := b.handleCommentGroup(f.Doc); err != nil {
-			p.Docs = append(p.Docs, doc)
+		doc, cerr := b.handleCommentGroup(f.Doc)
+		if cerr != nil {
+			return p, cerr
 		}
+		p.Docs = append(p.Docs, doc)
 	}
 
 	if f.Comment != nil {
 		b.comments[f.Comment] = struct{}{}
-		if doc, err := b.handleCommentGroup(f.Comment); err != nil {
-			p.Docs = append(p.Docs, doc)
+		doc, cerr := b.handleCommentGroup(f.Comment)
+		if cerr != nil {
+			return p, cerr
 		}
+		p.Docs = append(p.Docs, doc)
 	}
 
 	// read location information(line, column, source text etc) for giving type.
@@ -1106,16 +1128,20 @@ func (b *ParseScope) handleParameterWithName(fnName string, f *ast.Field, nm *as
 
 	if f.Doc != nil {
 		b.comments[f.Doc] = struct{}{}
-		if doc, err := b.handleCommentGroup(f.Doc); err != nil {
-			p.Docs = append(p.Docs, doc)
+		doc, cerr := b.handleCommentGroup(f.Doc)
+		if cerr != nil {
+			return p, cerr
 		}
+		p.Docs = append(p.Docs, doc)
 	}
 
 	if f.Comment != nil {
 		b.comments[f.Comment] = struct{}{}
-		if doc, err := b.handleCommentGroup(f.Comment); err != nil {
-			p.Docs = append(p.Docs, doc)
+		doc, cerr := b.handleCommentGroup(f.Comment)
+		if cerr != nil {
+			return p, cerr
 		}
+		p.Docs = append(p.Docs, doc)
 	}
 
 	obj := b.Info.ObjectOf(nm)
@@ -1254,18 +1280,37 @@ func (b *ParseScope) getTypeFromValueExpr(f *ast.Ident, val ast.Expr, v *ast.Val
 		base, err = b.findTypeInPackages(f, others)
 	}
 
-	fmt.Printf("Var::Name(%q): %#v -> \n", f.Name, f)
-	fmt.Printf("GetType::Value: %#v -> \n", val)
-	fmt.Printf("GetTo: %#v \n\n", base)
-
 	if err != nil {
 		return nil, err
+	}
+
+	if docs, ok := base.(commentaryDocs); ok && val != nil {
+		if v.Doc != nil {
+			doc, cerr := b.handleCommentGroup(v.Doc)
+			if cerr != nil {
+				return base, cerr
+			}
+			docs.SetDoc(doc)
+		}
+		if v.Comment != nil {
+			doc, cerr := b.handleCommentGroup(v.Comment)
+			if cerr != nil {
+				return base, cerr
+			}
+			docs.AddDoc(doc)
+		}
 	}
 
 	if val == nil {
 		return base, nil
 	}
 
+	if geoClone, ok := base.(cloneLocation); ok {
+		lm := b.getLocation(val.Pos(), val.End())
+		geoClone.Clone(lm)
+	}
+
+	fmt.Printf("GetTo[%q]: %#v \n\n", f.Name, base)
 	return b.processValues(base, val, v, others)
 }
 
@@ -1273,7 +1318,7 @@ func (b *ParseScope) processValues(owner Identity, value interface{}, cave *ast.
 	//fmt.Printf("Val:TT %#v\n", value)
 
 	switch rbase := owner.(type) {
-	case Base:
+	case *Base:
 		switch vt := value.(type) {
 		case *ast.Ident:
 			rbase.Value = vt.Name
@@ -1284,8 +1329,8 @@ func (b *ParseScope) processValues(owner Identity, value interface{}, cave *ast.
 		}
 
 		return rbase, nil
-	case List:
-	case Map:
+	case *List:
+	case *Map:
 	}
 	return owner, nil
 }
@@ -1295,8 +1340,7 @@ func (b *ParseScope) findTypeInPackages(e interface{}, others map[string]*Packag
 
 	switch core := e.(type) {
 	case *ast.Ident:
-		obj := b.Info.ObjectOf(core)
-		return b.findTypeInPackages(obj.Type(), others)
+		return b.transformIdent(core, others)
 	case *types.Basic:
 		return BaseFor(core.Name()), nil
 	case *ast.BasicLit:
@@ -1305,33 +1349,289 @@ func (b *ParseScope) findTypeInPackages(e interface{}, others map[string]*Packag
 	case *ast.StarExpr:
 	case *ast.UnaryExpr:
 	case *ast.SelectorExpr:
+		return b.transformSelectorExpr(core, others)
 	case *ast.IndexExpr:
+	case *types.Named:
 	case *types.Slice:
-		return List{}, nil
+		return &List{}, nil
 	case *types.Array:
-		return List{}, nil
+		return &List{}, nil
 	case *ast.ArrayType:
-		return List{}, nil
+		return &List{}, nil
 	case *ast.FuncLit:
 	case *ast.ParenExpr:
 	case *ast.MapType:
-		return Map{}, nil
+		return &Map{}, nil
 	case *types.Map:
-		return Map{}, nil
+		return &Map{}, nil
 	case *ast.SliceExpr:
-		return List{}, nil
+		return &List{}, nil
 	case *ast.ChanType:
-		return Channel{}, nil
+		return &Channel{}, nil
 	case *types.Chan:
-		return Channel{}, nil
+		return &Channel{}, nil
 	case *ast.KeyValueExpr:
 	case *types.Signature:
-		return CallExpr{}, nil
+		return &CallExpr{}, nil
 	case *ast.BinaryExpr:
 	case *ast.InterfaceType:
 	}
 
 	return nil, errors.Wrap(ErrNotFound, "unable to find type")
+}
+
+func (b *ParseScope) transformIdent(e *ast.Ident, others map[string]*Package) (Identity, error) {
+	obj := b.Info.ObjectOf(e)
+	return b.findTypeInPackages(obj.Type(), others)
+}
+
+func (b *ParseScope) transformCallExpr(e *ast.CallExpr, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformEmptyStmt(e *ast.EmptyStmt, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformBadStmt(e *ast.BadStmt, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformExprStmt(e *ast.ExprStmt, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformGoStmt(e *ast.GoStmt, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformForStmt(e *ast.ForStmt, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformIfStmt(e *ast.IfStmt, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformIncDecStmt(e *ast.IncDecStmt, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformIndexExpr(e *ast.IndexExpr, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformKeyValueExpr(e *ast.KeyValueExpr, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformLabeledStmt(e *ast.LabeledStmt, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformParentExpr(e *ast.ParenExpr, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformReturnStmt(e *ast.ReturnStmt, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformSelectStmt(e *ast.SelectStmt, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformSwitchStmt(e *ast.SwitchStmt, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformSendStmt(e *ast.SendStmt, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformTypeAssertStmt(e *ast.TypeAssertExpr, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformTypeSwitchStmt(e *ast.TypeSwitchStmt, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformRangeStmt(e *ast.RangeStmt, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformUnaryExpr(e *ast.UnaryExpr, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformEllipsis(e *ast.Ellipsis, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformDeferStmt(e *ast.DeferStmt, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformDeclrStmt(e *ast.DeclStmt, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformCommClause(e *ast.CommClause, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformCaseClause(e *ast.CaseClause, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformAssignStmt(e *ast.AssignStmt, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformBranchStmt(e *ast.BranchStmt, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformBlockStatement(e *ast.BlockStmt, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformBinaryExpr(e *ast.BinaryExpr, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformStarExpr(e *ast.StarExpr, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformArrayType(e *ast.ArrayType, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformBasicLit(e *ast.BasicLit, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformCompositeLit(e *ast.CompositeLit, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformChanType(e *ast.ChanType, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformMapType(e *ast.MapType, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformSliceExpr(e *ast.SliceExpr, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformMethodSet(e *types.MethodSet, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e, e.Len())
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformTypeAndValue(e *types.TypeAndValue, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e, e.Type)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformPointer(e *types.Pointer, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e, e.Underlying())
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformSignature(e *types.Signature, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e, e.Underlying())
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformChanDir(e types.ChanDir, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformChan(e *types.Chan, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e, e.Underlying())
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformStruct(e *types.Struct, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e, e.Underlying())
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformInterface(e *types.Interface, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e, e.Underlying())
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformArray(e *types.Array, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e, e.Underlying())
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformSlice(e *types.Slice, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e, e.Underlying())
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformMap(e *types.Map, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e, e.Underlying())
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformNamed(e *types.Named, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named: %#v -> %#v\n", e.Obj(), e)
+	return &Type{}, nil
+}
+
+func (b *ParseScope) transformSelectorExpr(e *ast.SelectorExpr, others map[string]*Package) (Identity, error) {
+	xObj := b.Info.ObjectOf(e.X.(*ast.Ident))
+	selObj := b.Info.ObjectOf(e.Sel)
+	fmt.Printf("SelExpr:X %#v -> %#v\n", e.X, xObj.Name())
+	fmt.Printf("SelExpr:Sel %#v -> %#v\n", e.Sel, selObj.Name())
+	fmt.Printf("SelExpr:Sel %#v -> %#v -> %#v\n", e.Sel, selObj.Type(), selObj.Pkg())
+	return &Type{}, nil
 }
 
 //******************************************************************************
