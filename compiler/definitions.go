@@ -87,14 +87,6 @@ func (f Pathway) Addr() string {
 	return f.Path
 }
 
-// DocText embodies a file level text not
-// associated with any declaration exiting
-// within a file.
-type DocText struct {
-	Location
-	Text string
-}
-
 // Tag embodies a field tag and it's value declared
 // for a struct field.
 type Tag struct {
@@ -126,13 +118,21 @@ func (p *Annotation) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
+// DocText embodies a file level text not
+// associated with any declaration exiting
+// within a file.
+type DocText struct {
+	Location *Location
+	Text     string
+}
+
 // Doc represents the associated documentation for
 // a giving package or type declaration. It contains
 // the main text which is the first paragraph of the
 // commentary and the extra commentary which are seperated
 // by 2 newline spacing.
 type Doc struct {
-	Location
+	Location *Location
 
 	Text  string
 	Parts []DocText
