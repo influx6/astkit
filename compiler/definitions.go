@@ -1147,6 +1147,9 @@ type Function struct {
 	// contract for an interface.
 	IsMethod bool
 
+	// IsVariadic indicates if the last argument is variadic.
+	IsVariadic bool
+
 	// IsAsync indicates whether function is called
 	// asynchronously in goroutine.
 	IsAsync bool
