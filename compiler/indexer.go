@@ -876,12 +876,10 @@ func (b *ParseScope) handleEmbeddedInterface(ownerName string, f *ast.Field, t a
 
 	embedded, ok := identity.(*Interface)
 	if !ok {
-		//return errors.New("Expected type should be an interface: %#v\n", identity)
+		return errors.New("Expected type should be an interface: %#v\n", identity)
 	}
 
-	fmt.Printf("Embedded[%q] -> %#v\n", ownerName, embedded)
-	_ = embedded
-	//host.Composes[identity.ID()] = embedded
+	host.Composes[identity.ID()] = embedded
 	return nil
 }
 
@@ -1410,8 +1408,6 @@ func (b *ParseScope) processValues(owner Identity, value interface{}, cave *ast.
 }
 
 func (b *ParseScope) transformTypeFor(e interface{}, others map[string]*Package) (Identity, error) {
-	fmt.Printf("TypeInPkg: %#v \n", e)
-
 	switch core := e.(type) {
 	case types.Object:
 		return b.transformObject(core, others)
@@ -1484,9 +1480,6 @@ func (b *ParseScope) transformBasic(e *types.Basic, others map[string]*Package) 
 }
 
 func (b *ParseScope) transformObject(e types.Object, others map[string]*Package) (Identity, error) {
-	fmt.Printf("\ntransformObj[%q]: %#v -> %#v\n\n", e.Name(), e.Type(), e.Pkg())
-	fmt.Printf("transformObj::Parent[%q]: %#v -> %#v\n\n", e.Name(), e.Id(), e.String())
-
 	// Is this a package-less type, if so then we need to handle type.
 	if e.Pkg() == nil {
 		return b.transformPackagelessObject(e.Type(), e, others)
@@ -1505,8 +1498,6 @@ func (b *ParseScope) transformObject(e types.Object, others map[string]*Package)
 }
 
 func (b *ParseScope) transformPackagelessObject(te types.Type, obj types.Object, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Packageless: %#v -> %#v --> %#v\n", te, te.Underlying(), obj)
-
 	switch tm := te.(type) {
 	case *types.Basic:
 		return b.transformTypeFor(tm, others)
@@ -1517,7 +1508,6 @@ func (b *ParseScope) transformPackagelessObject(te types.Type, obj types.Object,
 }
 
 func (b *ParseScope) transformPackagelessNamedWithObject(e *types.Named, obj types.Object, others map[string]*Package) (Identity, error) {
-	fmt.Printf("NamedPackageless: %#v -> %#v --> %#v\n", e, e.Obj(), e.Underlying())
 	switch tm := e.Underlying().(type) {
 	case *types.Struct:
 		return b.transformStructWithNamed(tm, e, others)
@@ -1822,7 +1812,7 @@ func (b *ParseScope) transformPointer(e *types.Pointer, others map[string]*Packa
 	return &Type{Methods: map[string]Function{}}, nil
 }
 
-func (b *ParseScope) transformSignature(signature *types.Signature, others map[string]*Package) (Identity, error) {
+func (b *ParseScope) transformSignature(signature *types.Signature, others map[string]*Package) (Function, error) {
 	var fn Function
 
 	if params := signature.Results(); params != nil {
@@ -1830,7 +1820,7 @@ func (b *ParseScope) transformSignature(signature *types.Signature, others map[s
 			vard := params.At(i)
 			ft, err := b.transformObject(vard, others)
 			if err != nil {
-				return nil, err
+				return fn, err
 			}
 
 			var field Parameter
@@ -1845,7 +1835,7 @@ func (b *ParseScope) transformSignature(signature *types.Signature, others map[s
 			vard := params.At(i)
 			ft, err := b.transformObject(vard, others)
 			if err != nil {
-				return nil, err
+				return fn, err
 			}
 
 			var field Parameter
@@ -1888,7 +1878,7 @@ func (b *ParseScope) transformNamed(e *types.Named, others map[string]*Package) 
 	return &Type{Methods: map[string]Function{}}, nil
 }
 
-func (b *ParseScope) transformStruct(e *types.Struct, others map[string]*Package) (Identity, error) {
+func (b *ParseScope) transformStruct(e *types.Struct, others map[string]*Package) (Struct, error) {
 	var declr Struct
 	declr.Fields = map[string]Field{}
 
@@ -1952,7 +1942,7 @@ func (b *ParseScope) transformFunc(e *types.Func, others map[string]*Package) (I
 		return nil, err
 	}
 
-	fn.(Function).Name = e.Name()
+	fn.Name = e.Name()
 	return fn, nil
 }
 
