@@ -63,11 +63,19 @@ var (
 
 	viji = &vikvi
 
+	vyuiji api.Cracker = api.Cracker{}
+
+	vyuijix = api.Cracker{}
+
+	vyuiko = api.RUki
+
 	vikvi2 chan struct{} = make(chan struct{}, 0)
 
 	nik = func() {}
 
 	dih = hji()
+
+	rizr = map[string]map[string]string{}
 
 	riz = map[string]string{}
 
@@ -105,6 +113,8 @@ var (
 	Creed int = 10
 	Fall      = 1000
 
+	jilto = map[api.Pos]string{}
+	pilto = map[string]api.Pos{}
 	wilto = []map[string]api.Pos{}
 	Willt = map[string]interface{}{}
 )

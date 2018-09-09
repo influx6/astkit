@@ -18,6 +18,12 @@ type Resolvable interface {
 	Resolve(map[string]*Package) error
 }
 
+// Address defines interface with exposed method to get
+// Address of giving declared type.
+type Address interface {
+	Addr() string
+}
+
 // Identity defines an interface that exposes a single method
 // to retrieve name of giving implementer.
 type Identity interface {
@@ -33,12 +39,6 @@ type GeoCoordinates interface {
 
 type cloneLocation interface {
 	Clone(Location)
-}
-
-// Address defines interface with exposed method to get
-// Address of giving declared type.
-type Address interface {
-	Addr() string
 }
 
 // Expr defines a interface exposing a giving method.
@@ -588,9 +588,6 @@ type Map struct {
 	// to type for declarations where type has provided values.
 	KeyPairs []KeyPair
 
-	// Name represents the name of giving interface.
-	Name string
-
 	// Exported is used to indicate if type is exported or not.
 	Exported bool
 
@@ -608,7 +605,7 @@ type Map struct {
 
 // ID implements Identity interface.
 func (p Map) ID() string {
-	return p.Name
+	return "Map"
 }
 
 // Resolve takes the list of indexed packages to internal structures
@@ -636,9 +633,6 @@ type List struct {
 	// IsSlice indicates if giving type is a slice or array type.
 	IsSlice bool
 
-	// Name represents the name of giving interface.
-	Name string
-
 	// Length defines giving length associated with slice or array.
 	Length int64
 
@@ -664,7 +658,7 @@ type List struct {
 
 // ID implements Identity interface.
 func (p List) ID() string {
-	return p.Name
+	return "List"
 }
 
 // Resolve takes the list of indexed packages to internal structures
@@ -685,9 +679,6 @@ func (p *List) Resolve(indexed map[string]*Package) error {
 type ValueField struct {
 	Commentaries
 	Location
-
-	// IsPointer indicates if giving variable type is a pointer.
-	IsPointer bool
 
 	// Name represents the name of giving interface.
 	Name string
@@ -716,12 +707,6 @@ type Channel struct {
 	Commentaries
 	Location
 
-	// IsPointer indicates if giving variable type is a pointer.
-	IsPointer bool
-
-	// Name represents the name of giving interface.
-	Name string
-
 	// Exported is used to indicate if type is exported or not.
 	Exported bool
 
@@ -736,7 +721,7 @@ type Channel struct {
 
 // ID implements Identity interface.
 func (p Channel) ID() string {
-	return p.Name
+	return "Channel"
 }
 
 // Resolve takes the list of indexed packages to internal structures
@@ -752,15 +737,40 @@ func (p *Channel) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
+// Pointer represents a golang pointer types which include
+// strings, int types, floats, complex, etc, which are
+// atomic indivisible types.
+type Pointer struct {
+	Location
+	Commentaries
+
+	// Name represents the name of giving type.
+	Name string
+
+	// Value contains associated value of giving base type if
+	// is a variable.
+	Elem Identity
+}
+
+// ID implements the Identity interface.
+func (p Pointer) ID() string {
+	return "*" + p.Elem.ID()
+}
+
+// Resolve takes the list of indexed packages to internal structures
+// to resolve imported or internal types that they Pathwayerence. This is
+// used to ensure all package structures have direct link to parsed
+// type.
+func (p *Pointer) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
 // Base represents a golang base types which include
 // strings, int types, floats, complex, etc, which are
 // atomic indivisible types.
 type Base struct {
 	Location
 	Commentaries
-
-	// IsPointer indicates if giving variable type is a pointer.
-	IsPointer bool
 
 	// Name represents the name of giving type.
 	Name string
@@ -771,15 +781,15 @@ type Base struct {
 }
 
 // BaseFor returns a new instance of Base using provided Name.
-func BaseFor(baseName string) *Base {
-	return &Base{
+func BaseFor(baseName string) Base {
+	return Base{
 		Name: baseName,
 	}
 }
 
 // BaseWith returns a new instance of Base using provided Name and value.
-func BaseWith(baseName string, value string) *Base {
-	return &Base{
+func BaseWith(baseName string, value string) Base {
+	return Base{
 		Value: value,
 		Name:  baseName,
 	}
@@ -807,9 +817,6 @@ type Variable struct {
 
 	// Type sets the value object/declared type.
 	Type Identity
-
-	// IsPointer indicates if giving variable type is a pointer.
-	IsPointer bool
 
 	// Name represents the name of giving interface.
 	Name string
@@ -1072,7 +1079,7 @@ type Struct struct {
 
 	// Composes contains all interface types composed by
 	// given struct type.
-	Composes map[string]*Interface
+	Composes []Field
 
 	// Embeds contains all struct types composed by
 	// given struct type.

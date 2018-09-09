@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"go/types"
 	"log"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -427,7 +428,6 @@ func (b *ParseScope) handleStruct(ctx context.Context, str *ast.StructType, ty *
 	declr.Name = structName
 	declr.Fields = map[string]Field{}
 	declr.Embeds = map[string]*Struct{}
-	declr.Composes = map[string]*Interface{}
 	declr.Methods = map[string]Function{}
 	declr.Location = b.getLocation(ty.Pos(), ty.End())
 
@@ -475,7 +475,7 @@ func (b *ParseScope) handleStruct(ctx context.Context, str *ast.StructType, ty *
 			if err != nil {
 				return err
 			}
-			declr.Fields[fl.Name] = fl
+			declr.Composes = append(declr.Composes, fl)
 			continue
 		}
 
@@ -1032,6 +1032,7 @@ func (b *ParseScope) handleField(ownerName string, f *ast.Field, t ast.Expr) (Fi
 		}
 
 		pAddr.Type = tl
+		pAddr.Name = tl.ID()
 		return nil
 	}
 
@@ -1156,6 +1157,7 @@ func (b *ParseScope) handleParameter(fnName string, f *ast.Field, t ast.Expr) (P
 		}
 
 		pAddr.Type = tl
+		pAddr.Name = tl.ID()
 		return nil
 	}
 
@@ -1322,8 +1324,6 @@ func (b *ParseScope) getImport(aliasName string) (Import, error) {
 }
 
 func (b *ParseScope) getTypeFromTypeSpecExpr(e ast.Expr, t *ast.TypeSpec, others map[string]*Package) (Identity, error) {
-	fmt.Printf("GetTypeFromTypeSpec: %#v -> %#v\n\n", e, t)
-
 	base, err := b.transformTypeFor(e, others)
 	if err != nil {
 		return nil, err
@@ -1332,7 +1332,6 @@ func (b *ParseScope) getTypeFromTypeSpecExpr(e ast.Expr, t *ast.TypeSpec, others
 }
 
 func (b *ParseScope) getTypeFromFieldExpr(e ast.Expr, f *ast.Field, others map[string]*Package) (Identity, error) {
-	fmt.Printf("GetTypeFromField: %#v -> %#v\n\n", e, f)
 	base, err := b.transformTypeFor(e, others)
 	if err != nil {
 		return nil, err
@@ -1389,7 +1388,7 @@ func (b *ParseScope) processValues(owner Identity, value interface{}, cave *ast.
 	//fmt.Printf("Val:TT %#v\n", value)
 
 	switch rbase := owner.(type) {
-	case *Base:
+	case Base:
 		switch vt := value.(type) {
 		case *ast.Ident:
 			rbase.Value = vt.Name
@@ -1412,24 +1411,24 @@ func (b *ParseScope) transformTypeFor(e interface{}, others map[string]*Package)
 		return b.transformObject(core, others)
 	case *ast.Ident:
 		return b.transformIdent(core, others)
+	case *types.Interface:
+		return b.transformInterface(core, others)
+	case *ast.InterfaceType:
+		return b.transformInterfaceType(core, others)
+	case *ast.StructType:
+		return b.transformStructType(core, others)
 	case *types.Struct:
 		return b.transformStruct(core, others)
 	case *types.Basic:
 		return b.transformBasic(core, others)
 	case *ast.BasicLit:
 		return b.transformBasicLit(core, others)
-	case *ast.CallExpr:
-		return b.transformCallExpr(core, others)
 	case *ast.CompositeLit:
 		return b.transformCompositeLit(core, others)
 	case *ast.StarExpr:
 		return b.transformStarExpr(core, others)
-	case *ast.UnaryExpr:
-		return b.transformUnaryExpr(core, others)
 	case *ast.SelectorExpr:
 		return b.transformSelectorExpr(core, others)
-	case *ast.IndexExpr:
-		return b.transformIndexExpr(core, others)
 	case *types.Named:
 		return b.transformNamed(core, others)
 	case *types.Slice:
@@ -1442,26 +1441,18 @@ func (b *ParseScope) transformTypeFor(e interface{}, others map[string]*Package)
 		return b.transformArrayType(core, others)
 	case *ast.FuncLit:
 		return b.transformFuncLit(core, others)
-	case *ast.ParenExpr:
-		return b.transformParentExpr(core, others)
 	case *ast.MapType:
 		return b.transformMapType(core, others)
 	case *types.Map:
 		return b.transformMap(core, others)
-	case *ast.SliceExpr:
-		return b.transformSliceExpr(core, others)
 	case *ast.ChanType:
 		return b.transformChanType(core, others)
 	case *types.Chan:
 		return b.transformChan(core, others)
-	case *ast.KeyValueExpr:
-		return b.transformKeyValueExpr(core, others)
 	case *types.Signature:
 		return b.transformSignature(core, others)
 	case *ast.FuncType:
 		return b.transformFuncType(core, others)
-	case *ast.BinaryExpr:
-		return b.transformBinaryExpr(core, others)
 	}
 
 	return nil, errors.Wrap(ErrNotFound, "unable to find type: %#v", e)
@@ -1474,26 +1465,149 @@ func (b *ParseScope) transformIdent(e *ast.Ident, others map[string]*Package) (I
 	return nil, errors.New("expected to have types.Object for %#v", e)
 }
 
-func (b *ParseScope) transformBasic(e *types.Basic, others map[string]*Package) (Identity, error) {
+func (b *ParseScope) transformBasic(e *types.Basic, others map[string]*Package) (Base, error) {
 	return BaseFor(e.Name()), nil
 }
 
+var (
+	pathRegEx      = regexp.MustCompile(`([a-zA-Z0-9-\.\/]+)`)
+	identityRegExp = regexp.MustCompile(`(^[a-zA-Z0-9\[\]\{\}\(\)]+)?([\[|\(|\{](.+)[\}|\]|\)])`)
+)
+
+func (b *ParseScope) identityType(e typeRepresentation, others map[string]*Package) (typeIdentity, error) {
+	var id typeIdentity
+
+	typeString := e.String()
+	//if !identityRegExp.MatchString(typeString) && !pathRegEx.MatchString(typeString) {
+	//	return id, errors.New("unable to match type as external, probably internal or basic type")
+	//}
+
+	if identityRegExp.MatchString(typeString) {
+		parts := identityRegExp.FindAllString(typeString, -1)
+		fmt.Printf("\nIdentity[%q]: %+q\n\n", typeString, parts)
+	}
+
+	if pathRegEx.MatchString(typeString) {
+		parts := pathRegEx.FindAllString(typeString, -1)
+		fmt.Printf("\nPath[%q]: %+q\n\n", typeString, parts)
+	}
+
+	return id, nil
+}
+
+type typeRepresentation interface {
+	String() string
+}
+
+type typeIdentity struct {
+	Package string
+	Type    string
+	Alias   string
+}
+
 func (b *ParseScope) transformObject(e types.Object, others map[string]*Package) (Identity, error) {
+	fmt.Printf("\nOP::[%T:%T:%q]: %q ---> %q ----------> %q \n\n", e, e.Type(), e.Name(), e.String(), e.Id(), e.Type().String())
+
 	// Is this a package-less type, if so then we need to handle type.
 	if e.Pkg() == nil {
 		return b.transformPackagelessObject(e.Type(), e, others)
 	}
 
 	switch tm := e.Type().(type) {
+	case *types.Map:
+		return b.transformMapWithObject(tm, e, others)
+	case *types.Chan:
+		return b.transformChanWithObject(tm, e, others)
+	case *types.Array:
+		return b.transformArrayWithObject(tm, e, others)
+	case *types.Slice:
+		return b.transformSliceWithObject(tm, e, others)
 	case *types.Basic:
-		return b.transformTypeFor(tm, others)
+		return b.transformBasicWithObject(tm, e, others)
+	case *types.Struct:
+		return b.transformStructWithObject(tm, e, others)
+	case *types.Interface:
+		return b.transformInterfaceWithObject(tm, e, others)
 	case *types.Signature:
 		return b.transformSignatureWithObject(tm, e, others)
 	case *types.Named:
 		return b.transformNamedWithObject(tm, e, others)
-	default:
-		return b.transformTypeFor(tm, others)
+	case *types.Pointer:
+		return b.transformPointerWithObject(tm, e, others)
 	}
+
+	return nil, errors.New("unable to transform object implementation: %#v", e)
+}
+
+func (b *ParseScope) transformMapWithObject(e *types.Map, vard types.Object, others map[string]*Package) (Map, error) {
+	_, _ = b.identityType(e.Key(), others)
+	_, _ = b.identityType(e.Elem(), others)
+
+	var declr Map
+
+	var err error
+	declr.KeyType, err = b.transformTypeFor(e.Key(), others)
+	if err != nil {
+		return declr, err
+	}
+
+	declr.ValueType, err = b.transformTypeFor(e.Elem(), others)
+	if err != nil {
+		return declr, err
+	}
+
+	return declr, nil
+}
+
+func (b *ParseScope) transformPointerWithObject(e *types.Pointer, vard types.Object, others map[string]*Package) (Identity, error) {
+	var err error
+	var declr Pointer
+	declr.Elem, err = b.transformTypeFor(e.Elem(), others)
+	return declr, err
+}
+
+func (b *ParseScope) transformArrayWithObject(e *types.Array, vard types.Object, others map[string]*Package) (List, error) {
+	var declr List
+	if _, ok := e.Elem().(*types.Pointer); ok {
+		declr.IsPointer = true
+	}
+
+	var err error
+	declr.Type, err = b.transformTypeFor(e.Elem(), others)
+	return declr, err
+}
+
+func (b *ParseScope) transformSliceWithObject(e *types.Slice, vard types.Object, others map[string]*Package) (List, error) {
+	var declr List
+	declr.IsSlice = true
+
+	if _, ok := e.Elem().(*types.Pointer); ok {
+		declr.IsPointer = true
+	}
+
+	var err error
+	declr.Type, err = b.transformTypeFor(e.Elem(), others)
+	return declr, err
+}
+
+func (b *ParseScope) transformChanWithObject(e *types.Chan, vard types.Object, others map[string]*Package) (Channel, error) {
+	return b.transformChan(e, others)
+}
+
+func (b *ParseScope) transformBasicWithObject(e *types.Basic, vard types.Object, others map[string]*Package) (Base, error) {
+	return b.transformBasic(e, others)
+}
+
+func (b *ParseScope) transformInterfaceWithObject(e *types.Interface, vard types.Object, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Var::Interface: %#v -> %#v --> %q\n\n", e, e.Underlying(), e.String())
+	_, _ = b.identityType(e, others)
+	return b.transformTypeFor(e, others)
+}
+
+func (b *ParseScope) transformStructWithObject(e *types.Struct, vard types.Object, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Var::Struct: %#v -> %#v --> %q\n\n", e, e.Underlying(), e.String())
+	_, _ = b.identityType(e, others)
+	return b.transformTypeFor(e, others)
 }
 
 func (b *ParseScope) transformPackagelessObject(te types.Type, obj types.Object, others map[string]*Package) (Identity, error) {
@@ -1511,18 +1625,18 @@ func (b *ParseScope) transformPackagelessNamedWithObject(e *types.Named, obj typ
 	case *types.Struct:
 		return b.transformStructWithNamed(tm, e, others)
 	case *types.Interface:
-		return b.transformInterface(tm, e, others)
+		return b.transformInterfaceWithNamed(tm, e, others)
 	}
 	return nil, errors.New("package-less named type: %#v", e)
 }
 
 func (b *ParseScope) transformNamedWithObject(e *types.Named, obj types.Object, others map[string]*Package) (Identity, error) {
-	fmt.Printf("\nNamedWithObj: %#v -> %#v --> %#v\n", e.Obj(), e.Underlying(), obj.Type())
+	_, _ = b.identityType(e, others)
 	switch tm := e.Underlying().(type) {
 	case *types.Struct:
-		return b.transformStructWithObject(tm, e, obj, others)
+		return b.locateStructWithObject(tm, e, obj, others)
 	case *types.Interface:
-		return b.transformInterfaceWithObject(tm, e, obj, others)
+		return b.locateInterfaceWithObject(tm, e, obj, others)
 	case *types.Slice:
 		return b.transformTypeFor(tm, others)
 	case *types.Map:
@@ -1531,288 +1645,20 @@ func (b *ParseScope) transformNamedWithObject(e *types.Named, obj types.Object, 
 		return b.transformTypeFor(tm, others)
 	case *types.Chan:
 		return b.transformTypeFor(tm, others)
-	case *types.Pointer:
 	case *types.Basic:
 		return b.transformTypeFor(tm, others)
-	default:
-		return b.transformNamedTypeWithObject(e.Obj(), e, obj, others)
 	}
-	return &Type{Methods: map[string]Function{}}, nil
+	return nil, errors.New("unknown named type with object: %#v", e)
 }
 
-func (b *ParseScope) transformNamedTypeWithObject(typedNamed *types.TypeName, named *types.Named, obj types.Object, others map[string]*Package) (Identity, error) {
-	fmt.Printf("NamedTypeWithObj[%q]: %#v -> %#v\n", named.Obj().Name(), typedNamed, named.Underlying())
-	return &Type{Methods: map[string]Function{}}, nil
+func (b *ParseScope) transformNamed(e *types.Named, others map[string]*Package) (Identity, error) {
+	_, _ = b.identityType(e, others)
+	return b.transformTypeFor(e.Underlying(), others)
 }
 
-func (b *ParseScope) transformSignatureWithObject(e *types.Signature, obj types.Object, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Signature: %#v -> %#v\n", e, e.Underlying())
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformStructWithObject(e *types.Struct, named *types.Named, obj types.Object, others map[string]*Package) (Identity, error) {
-	fmt.Printf("StructWithObj[%q]: %#v -> %#v -> %#v\n", named.Obj().Name(), e, e.Underlying(), obj.Pkg())
-	myPackage := obj.Pkg()
-
-	targetPackage, ok := others[myPackage.Path()]
-	if !ok {
-		return nil, errors.Wrap(ErrNotFound, "Unable to find target package %q", obj.Pkg().Path())
-	}
-
-	ref := strings.Join([]string{targetPackage.Name, named.Obj().Name()}, ".")
-	if target, ok := targetPackage.Structs[ref]; ok {
-		return target, nil
-	}
-
-	imported := myPackage.Imports()
-	for _, stage := range imported {
-		fmt.Printf("Stage[%q] -> %#v\n", named.Obj().Name(), stage)
-
-		targetPackage, ok := others[stage.Path()]
-		if !ok {
-			return nil, errors.Wrap(ErrNotFound, "Unable to find imported package %q", stage.Path())
-		}
-
-		ref := strings.Join([]string{targetPackage.Name, named.Obj().Name()}, ".")
-		if target, ok := targetPackage.Structs[ref]; ok {
-			return target, nil
-		}
-	}
-
-	return nil, errors.Wrap(ErrNotFound, "Unable to find target struct %q from package or its imported set", named.Obj().Name())
-}
-
-func (b *ParseScope) transformInterfaceWithObject(e *types.Interface, named *types.Named, obj types.Object, others map[string]*Package) (Identity, error) {
-	fmt.Printf("InterfaceWithObj: %#v -> %#v\n", e, e.Underlying())
-	myPackage := obj.Pkg()
-	targetPackage, ok := others[myPackage.Path()]
-	if !ok {
-		return nil, errors.Wrap(ErrNotFound, "Unable to find target package %q", obj.Pkg().Path())
-	}
-
-	ref := strings.Join([]string{targetPackage.Name, named.Obj().Name()}, ".")
-	if target, ok := targetPackage.Interfaces[ref]; ok {
-		return target, nil
-	}
-
-	imported := myPackage.Imports()
-	for _, stage := range imported {
-		targetPackage, ok := others[stage.Path()]
-		if !ok {
-			return nil, errors.Wrap(ErrNotFound, "Unable to find imported package %q", stage.Path())
-		}
-
-		ref := strings.Join([]string{targetPackage.Name, named.Obj().Name()}, ".")
-		if target, ok := targetPackage.Interfaces[ref]; ok {
-			return target, nil
-		}
-	}
-
-	return nil, errors.Wrap(ErrNotFound, "Unable to find target struct %q from package or its imported set", named.Obj().Name())
-}
-
-func (b *ParseScope) transformFuncLit(e *ast.FuncLit, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformCallExpr(e *ast.CallExpr, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformEmptyStmt(e *ast.EmptyStmt, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformBadStmt(e *ast.BadStmt, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformExprStmt(e *ast.ExprStmt, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformGoStmt(e *ast.GoStmt, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformForStmt(e *ast.ForStmt, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformIfStmt(e *ast.IfStmt, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformIncDecStmt(e *ast.IncDecStmt, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformIndexExpr(e *ast.IndexExpr, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformKeyValueExpr(e *ast.KeyValueExpr, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformLabeledStmt(e *ast.LabeledStmt, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformParentExpr(e *ast.ParenExpr, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformReturnStmt(e *ast.ReturnStmt, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformSelectStmt(e *ast.SelectStmt, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformSwitchStmt(e *ast.SwitchStmt, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformSendStmt(e *ast.SendStmt, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformTypeAssertStmt(e *ast.TypeAssertExpr, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformTypeSwitchStmt(e *ast.TypeSwitchStmt, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformRangeStmt(e *ast.RangeStmt, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformUnaryExpr(e *ast.UnaryExpr, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformEllipsis(e *ast.Ellipsis, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformDeferStmt(e *ast.DeferStmt, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformDeclrStmt(e *ast.DeclStmt, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformCommClause(e *ast.CommClause, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformCaseClause(e *ast.CaseClause, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformAssignStmt(e *ast.AssignStmt, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformBranchStmt(e *ast.BranchStmt, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformBlockStatement(e *ast.BlockStmt, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformBinaryExpr(e *ast.BinaryExpr, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformStarExpr(e *ast.StarExpr, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformArrayType(e *ast.ArrayType, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformBasicLit(e *ast.BasicLit, others map[string]*Package) (Identity, error) {
-	fmt.Printf("BasicLit: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformCompositeLit(e *ast.CompositeLit, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformChanType(e *ast.ChanType, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformMapType(e *ast.MapType, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformSliceExpr(e *ast.SliceExpr, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformMethodSet(e *types.MethodSet, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e, e.Len())
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformTypeAndValue(e *types.TypeAndValue, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e, e.Type)
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformPointer(e *types.Pointer, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e, e.Underlying())
-	return &Type{Methods: map[string]Function{}}, nil
-}
-
-func (b *ParseScope) transformSignature(signature *types.Signature, others map[string]*Package) (Function, error) {
+func (b *ParseScope) transformSignatureWithObject(signature *types.Signature, obj types.Object, others map[string]*Package) (Function, error) {
 	var fn Function
+	fn.IsVariadic = signature.Variadic()
 
 	if params := signature.Results(); params != nil {
 		for i := 0; i < params.Len(); i++ {
@@ -1847,37 +1693,349 @@ func (b *ParseScope) transformSignature(signature *types.Signature, others map[s
 	return fn, nil
 }
 
-func (b *ParseScope) transformChanDir(e types.ChanDir, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e)
+func (b *ParseScope) locateStructWithObject(e *types.Struct, named *types.Named, obj types.Object, others map[string]*Package) (*Struct, error) {
+	_, _ = b.identityType(e, others)
+	myPackage := obj.Pkg()
+
+	targetPackage, ok := others[myPackage.Path()]
+	if !ok {
+		return nil, errors.Wrap(ErrNotFound, "Unable to find target package %q", obj.Pkg().Path())
+	}
+
+	ref := strings.Join([]string{targetPackage.Name, named.Obj().Name()}, ".")
+	if target, ok := targetPackage.Structs[ref]; ok {
+		return target, nil
+	}
+
+	imported := myPackage.Imports()
+	for _, stage := range imported {
+		fmt.Printf("Stage[%q] -> %#v\n", named.Obj().Name(), stage)
+
+		targetPackage, ok := others[stage.Path()]
+		if !ok {
+			return nil, errors.Wrap(ErrNotFound, "Unable to find imported package %q", stage.Path())
+		}
+
+		ref := strings.Join([]string{targetPackage.Name, named.Obj().Name()}, ".")
+		if target, ok := targetPackage.Structs[ref]; ok {
+			return target, nil
+		}
+	}
+
+	return nil, errors.Wrap(ErrNotFound, "Unable to find target struct %q from package or its imported set", named.Obj().Name())
+}
+
+func (b *ParseScope) locateInterfaceWithObject(e *types.Interface, named *types.Named, obj types.Object, others map[string]*Package) (*Interface, error) {
+	_, _ = b.identityType(e, others)
+	myPackage := obj.Pkg()
+	targetPackage, ok := others[myPackage.Path()]
+	if !ok {
+		return nil, errors.Wrap(ErrNotFound, "Unable to find target package %q", obj.Pkg().Path())
+	}
+
+	ref := strings.Join([]string{targetPackage.Name, named.Obj().Name()}, ".")
+	if target, ok := targetPackage.Interfaces[ref]; ok {
+		return target, nil
+	}
+
+	imported := myPackage.Imports()
+	for _, stage := range imported {
+		targetPackage, ok := others[stage.Path()]
+		if !ok {
+			return nil, errors.Wrap(ErrNotFound, "Unable to find imported package %q", stage.Path())
+		}
+
+		ref := strings.Join([]string{targetPackage.Name, named.Obj().Name()}, ".")
+		if target, ok := targetPackage.Interfaces[ref]; ok {
+			return target, nil
+		}
+	}
+
+	return nil, errors.Wrap(ErrNotFound, "Unable to find target struct %q from package or its imported set", named.Obj().Name())
+}
+
+func (b *ParseScope) transformStructWithNamed(e *types.Struct, named *types.Named, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Named::Struct: %#v -> %#v : %q --> %q\n\n", e, e.Underlying(), e.String(), named.String())
+	_, _ = b.identityType(e, others)
+	return b.transformTypeFor(e, others)
+}
+
+func (b *ParseScope) transformInterfaceWithNamed(e *types.Interface, named *types.Named, others map[string]*Package) (Interface, error) {
+	_, _ = b.identityType(e, others)
+
+	var declr Interface
+	declr.Name = named.Obj().Name()
+	declr.Methods = map[string]Function{}
+
+	for i := 0; i < e.NumMethods(); i++ {
+		method, err := b.transformFunc(e.Method(i), others)
+		if err != nil {
+			return declr, err
+		}
+		declr.Methods[method.ID()] = method
+	}
+
+	for i := 0; i < e.NumEmbeddeds(); i++ {
+		item := e.EmbeddedType(i)
+		emb, err := b.transformTypeFor(item, others)
+		if err != nil {
+			return declr, err
+		}
+
+		if iemb, ok := emb.(*Interface); ok {
+			declr.Composes[iemb.Addr()] = iemb
+		}
+
+		if iemb, ok := emb.(Interface); ok {
+			declr.Composes[iemb.Addr()] = &iemb
+		}
+	}
+
+	return declr, nil
+}
+
+func (b *ParseScope) transformFuncLit(e *ast.FuncLit, others map[string]*Package) (Function, error) {
+	fmt.Printf("FuncLit: %#v -> %#v\n", e, e.Type)
+	return b.handleFunctionLit(e)
+}
+
+func (b *ParseScope) transformInterfaceType(e *ast.InterfaceType, others map[string]*Package) (Interface, error) {
+	fmt.Printf("InterfaceExpr: %#v -> %#v\n", e, e.Interface)
+	var declr Interface
+
+	// read location information(line, column, source text etc) for giving type.
+	declr.Location = b.getLocation(e.Pos(), e.End())
+
+	if e.Methods == nil {
+		return declr, nil
+	}
+
+	for _, field := range e.Methods.List {
+		if len(field.Names) == 0 {
+			if err := b.handleEmbeddedInterface("interface", field, field.Type, others, &declr); err != nil {
+				return declr, nil
+			}
+			continue
+		}
+
+		for _, name := range field.Names {
+			fn, err := b.handleFunctionFieldWithName("interface", field, name, field.Type)
+			if err != nil {
+				return declr, err
+			}
+			declr.Methods[fn.Name] = fn
+		}
+	}
+
+	return declr, nil
+}
+
+func (b *ParseScope) transformStructType(e *ast.StructType, others map[string]*Package) (Struct, error) {
+	fmt.Printf("StructExpr: %#v -> %#v\n", e, e.Struct)
+	var declr Struct
+
+	// read location information(line, column, source text etc) for giving type.
+	declr.Location = b.getLocation(e.Pos(), e.End())
+
+	if e.Fields == nil {
+		return declr, nil
+	}
+
+	for _, field := range e.Fields.List {
+		if len(field.Names) == 0 {
+			parsedField, err := b.handleField("struct", field, field.Type)
+			if err != nil {
+				return declr, err
+			}
+
+			if err := parsedField.Resolve(others); err != nil {
+				return declr, err
+			}
+
+			declr.Composes = append(declr.Composes, parsedField)
+			continue
+		}
+
+		for _, fieldName := range field.Names {
+			parsedField, err := b.handleFieldWithName("struct", field, fieldName, field.Type)
+			if err != nil {
+				return declr, err
+			}
+
+			if err := parsedField.Resolve(others); err != nil {
+				return declr, err
+			}
+
+			declr.Fields[parsedField.Name] = parsedField
+		}
+	}
+
+	return declr, nil
+}
+
+func (b *ParseScope) transformStarExpr(e *ast.StarExpr, others map[string]*Package) (Pointer, error) {
+	fmt.Printf("StarExpr: %#v -> %#v\n", e, e.X)
+	var err error
+	var declr Pointer
+
+	// read location information(line, column, source text etc) for giving type.
+	declr.Location = b.getLocation(e.Pos(), e.End())
+
+	declr.Elem, err = b.transformTypeFor(e.X, others)
+	return declr, err
+}
+
+func (b *ParseScope) transformArrayType(e *ast.ArrayType, others map[string]*Package) (Identity, error) {
+	var declr List
+	if _, ok := e.Elt.(*ast.StarExpr); ok {
+		declr.IsPointer = true
+	}
+
+	// read location information(line, column, source text etc) for giving type.
+	declr.Location = b.getLocation(e.Pos(), e.End())
+
+	var err error
+	declr.Type, err = b.transformTypeFor(e.Elt, others)
+	return declr, err
+}
+
+func (b *ParseScope) transformBasicLit(e *ast.BasicLit, others map[string]*Package) (Identity, error) {
+	fmt.Printf("BasicLit: %#v -> %#v\n", e)
 	return &Type{Methods: map[string]Function{}}, nil
 }
 
-func (b *ParseScope) transformChan(e *types.Chan, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e, e.Underlying())
+func (b *ParseScope) transformCompositeLit(e *ast.CompositeLit, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Composite: %#v -> %#v\n", e)
 	return &Type{Methods: map[string]Function{}}, nil
+}
+
+func (b *ParseScope) transformChanType(e *ast.ChanType, others map[string]*Package) (Channel, error) {
+	var err error
+	var declr Channel
+
+	// read location information(line, column, source text etc) for giving type.
+	declr.Location = b.getLocation(e.Pos(), e.End())
+
+	declr.Type, err = b.transformTypeFor(e.Value, others)
+	return declr, err
+}
+
+func (b *ParseScope) transformMapType(e *ast.MapType, others map[string]*Package) (Map, error) {
+	var declr Map
+
+	var err error
+	declr.KeyType, err = b.transformTypeFor(e.Key, others)
+	if err != nil {
+		return declr, err
+	}
+
+	declr.ValueType, err = b.transformTypeFor(e.Value, others)
+	if err != nil {
+		return declr, err
+	}
+
+	return declr, nil
+}
+
+func (b *ParseScope) transformPointer(e *types.Pointer, others map[string]*Package) (Identity, error) {
+	var err error
+	var declr Pointer
+	declr.Elem, err = b.transformTypeFor(e.Elem(), others)
+	return declr, err
+}
+
+func (b *ParseScope) transformSignature(signature *types.Signature, others map[string]*Package) (Function, error) {
+	var fn Function
+	fn.IsVariadic = signature.Variadic()
+
+	if params := signature.Results(); params != nil {
+		for i := 0; i < params.Len(); i++ {
+			vard := params.At(i)
+			ft, err := b.transformObject(vard, others)
+			if err != nil {
+				return fn, err
+			}
+
+			var field Parameter
+			field.Type = ft
+			field.Name = vard.Name()
+			fn.Returns = append(fn.Returns, field)
+		}
+	}
+
+	if params := signature.Params(); params != nil {
+		for i := 0; i < params.Len(); i++ {
+			vard := params.At(i)
+			ft, err := b.transformObject(vard, others)
+			if err != nil {
+				return fn, err
+			}
+
+			var field Parameter
+			field.Type = ft
+			field.Name = vard.Name()
+			fn.Returns = append(fn.Returns, field)
+		}
+	}
+
+	return fn, nil
+}
+
+func (b *ParseScope) transformChan(e *types.Chan, others map[string]*Package) (Channel, error) {
+	var err error
+	var declr Channel
+	declr.Type, err = b.transformTypeFor(e.Elem(), others)
+	return declr, err
 }
 
 func (b *ParseScope) transformArray(e *types.Array, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e, e.Underlying())
-	return &Type{Methods: map[string]Function{}}, nil
+	var declr List
+	if _, ok := e.Elem().(*types.Pointer); ok {
+		declr.IsPointer = true
+	}
+
+	var err error
+	declr.Type, err = b.transformTypeFor(e.Elem(), others)
+	return declr, err
 }
 
 func (b *ParseScope) transformSlice(e *types.Slice, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e, e.Underlying())
-	return &Type{Methods: map[string]Function{}}, nil
+	var declr List
+	declr.IsSlice = true
+
+	if _, ok := e.Elem().(*types.Pointer); ok {
+		declr.IsPointer = true
+	}
+
+	var err error
+	declr.Type, err = b.transformTypeFor(e.Elem(), others)
+	return declr, err
 }
 
 func (b *ParseScope) transformMap(e *types.Map, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e, e.Underlying())
-	return &Type{Methods: map[string]Function{}}, nil
-}
+	fmt.Printf("Map:: %#v -> %#v ---> %q --> %#v\n\n", e, e.Underlying(), e.String(), e.Elem())
+	fmt.Printf("Map:: %#v -> %#v n\n", e.Key(), e.Elem())
+	_, _ = b.identityType(e.Key(), others)
+	_, _ = b.identityType(e.Elem(), others)
 
-func (b *ParseScope) transformNamed(e *types.Named, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Named: %#v -> %#v\n", e.Obj(), e)
-	return &Type{Methods: map[string]Function{}}, nil
+	var declr Map
+
+	var err error
+	declr.KeyType, err = b.transformTypeFor(e.Key(), others)
+	if err != nil {
+		return declr, err
+	}
+
+	declr.ValueType, err = b.transformTypeFor(e.Elem(), others)
+	if err != nil {
+		return declr, err
+	}
+
+	return declr, nil
 }
 
 func (b *ParseScope) transformStruct(e *types.Struct, others map[string]*Package) (Struct, error) {
+	_, _ = b.identityType(e, others)
 	var declr Struct
 	declr.Fields = map[string]Field{}
 
@@ -1889,6 +2047,7 @@ func (b *ParseScope) transformStruct(e *types.Struct, others map[string]*Package
 		}
 
 		var fl Field
+		fl.Tags = GetTags(e.Tag(i))
 		fl.Type = elem
 		fl.Name = field.Name()
 		declr.Fields[fl.Name] = fl
@@ -1897,15 +2056,9 @@ func (b *ParseScope) transformStruct(e *types.Struct, others map[string]*Package
 	return declr, nil
 }
 
-func (b *ParseScope) transformStructWithNamed(e *types.Struct, named *types.Named, others map[string]*Package) (Identity, error) {
-	fmt.Printf("\nDO::Struct: %#v -> %#v\n\n", e, e.Underlying())
-	var declr Struct
-	return declr, nil
-}
-
-func (b *ParseScope) transformInterface(e *types.Interface, named *types.Named, others map[string]*Package) (Identity, error) {
+func (b *ParseScope) transformInterface(e *types.Interface, others map[string]*Package) (Interface, error) {
+	_, _ = b.identityType(e, others)
 	var declr Interface
-	declr.Name = named.Obj().Name()
 	declr.Methods = map[string]Function{}
 
 	for i := 0; i < e.NumMethods(); i++ {
@@ -1913,41 +2066,123 @@ func (b *ParseScope) transformInterface(e *types.Interface, named *types.Named, 
 		if err != nil {
 			return declr, err
 		}
-		declr.Methods[method.ID()] = method.(Function)
+		declr.Methods[method.ID()] = method
 	}
 
-	// TODO(alex): We need to figure out the underline type
-	// and sort this out.
-	//for i := 0; i < e.NumEmbeddeds(); i++ {
-	//	item := e.EmbeddedType(i)
-	//	switch to := item.(type){
-	//	case *types.Named:
-	//	case *types.Interface:
-	//		to.
-	//	}
-	//}
+	for i := 0; i < e.NumEmbeddeds(); i++ {
+		item := e.EmbeddedType(i)
+		emb, err := b.transformTypeFor(item, others)
+		if err != nil {
+			return declr, err
+		}
+
+		if iemb, ok := emb.(*Interface); ok {
+			declr.Composes[iemb.Addr()] = iemb
+		}
+
+		if iemb, ok := emb.(Interface); ok {
+			declr.Composes[iemb.Addr()] = &iemb
+		}
+	}
 
 	return declr, nil
 }
 
-func (b *ParseScope) transformFunc(e *types.Func, others map[string]*Package) (Identity, error) {
+func (b *ParseScope) transformFunc(e *types.Func, others map[string]*Package) (Function, error) {
+	_, _ = b.identityType(e, others)
 	signature, ok := e.Type().(*types.Signature)
 	if !ok {
-		return nil, errors.New("expected signature as type: %#v", e.Type())
+		return Function{}, errors.New("expected *types.Signature as type: %#v", e.Type())
 	}
 
 	fn, err := b.transformSignature(signature, others)
 	if err != nil {
-		return nil, err
+		return Function{}, err
 	}
 
 	fn.Name = e.Name()
 	return fn, nil
 }
 
-func (b *ParseScope) transformFuncType(e *ast.FuncType, others map[string]*Package) (Identity, error) {
-	fmt.Printf("FuncType: %#v -> %#v\n", e, e)
-	return &Type{Methods: map[string]Function{}}, nil
+func (b *ParseScope) transformFuncType(e *ast.FuncType, others map[string]*Package) (Function, error) {
+	var declr Function
+
+	// read location information(line, column, source text etc) for giving type.
+	declr.Location = b.getLocation(e.Pos(), e.End())
+
+	if e.Params != nil {
+		var params []Parameter
+		for _, param := range e.Params.List {
+			if len(param.Names) == 0 {
+				p, err := b.handleParameter("func", param, param.Type)
+				if err != nil {
+					return declr, err
+				}
+
+				if err = p.Resolve(others); err != nil {
+					return declr, err
+				}
+
+				params = append(params, p)
+				continue
+			}
+
+			// If we have name as a named parameter or named return then
+			// appropriately
+			for _, name := range param.Names {
+				p, err := b.handleParameterWithName("func", param, name, param.Type)
+				if err != nil {
+					return declr, err
+				}
+
+				if err = p.Resolve(others); err != nil {
+					return declr, err
+				}
+
+				params = append(params, p)
+			}
+		}
+
+		declr.Arguments = params
+	}
+
+	if e.Results != nil {
+		var params []Parameter
+		for _, param := range e.Params.List {
+			if len(param.Names) == 0 {
+				p, err := b.handleParameter("func", param, param.Type)
+				if err != nil {
+					return declr, err
+				}
+
+				if err = p.Resolve(others); err != nil {
+					return declr, err
+				}
+
+				params = append(params, p)
+				continue
+			}
+
+			// If we have name as a named parameter or named return then
+			// appropriately
+			for _, name := range param.Names {
+				p, err := b.handleParameterWithName("func", param, name, param.Type)
+				if err != nil {
+					return declr, err
+				}
+
+				if err = p.Resolve(others); err != nil {
+					return declr, err
+				}
+
+				params = append(params, p)
+			}
+		}
+
+		declr.Returns = params
+	}
+
+	return declr, nil
 }
 
 func (b *ParseScope) transformSelectorExprWithIdent(xident *ast.Ident, e *ast.SelectorExpr, others map[string]*Package) (Identity, error) {
@@ -2003,9 +2238,8 @@ func (b *ParseScope) transformSelectorExpr(e *ast.SelectorExpr, others map[strin
 		return b.transformSelectorExprWithIdent(tx, e, others)
 	case *ast.SelectorExpr:
 		return b.transformSelectorExprWithSelector(tx, e, others)
-	default:
-		return nil, errors.New("unable to handle selector with type %#v", tx)
 	}
+	return nil, errors.New("unable to handle selector with type %#v", e.X)
 }
 
 func (b *ParseScope) transformSelectExprToMeta(e *ast.SelectorExpr, others map[string]*Package) (Meta, error) {

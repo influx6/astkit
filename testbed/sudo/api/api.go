@@ -1,5 +1,9 @@
 package api
 
+var (
+	RUki = Cracker{}
+)
+
 type Ruzo chan chan []string
 
 type Muzo chan []string
