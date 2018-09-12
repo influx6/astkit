@@ -165,7 +165,9 @@ func Bang(m string, p api.Rx) {
 
 func Hello(n string, pos api.Rx, v api.Wilk) {
 	bu := map[string]string{"sasd": n}
-	print("Map : %s : %d", bu, pos)
+	for index, elem := range bu {
+		print("Map : %s : %d", index, elem)
+	}
 }
 
 type Function struct {
@@ -187,7 +189,15 @@ type Function struct {
 
 func (f Function) hello(n string, v, u string, m int) {
 	bu := []string{"sasd", n}
-	print("List : %s", bu)
+	{
+		for i := 0; i < len(bu); i++ {
+			print("List : %s", bu[i])
+			continue
+		}
+	}
+
+	mx := bu[0:]
+	print("Bog: %q", mx)
 }
 
 // Functioner interface
@@ -218,7 +228,8 @@ type FunctionResult struct {
 	Day   int
 }
 
-func (f FunctionResult) hello() {
+func (f FunctionResult) hello(fn Functioner) {
 	var name string
 	print("Name : %s", name)
+	fn.IsVariadic()
 }

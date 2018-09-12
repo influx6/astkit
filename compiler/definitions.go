@@ -12,6 +12,13 @@ import (
 // division, bracket closing, ...etc.
 type ExprType int
 
+// constant set of express types represented by ExprType.
+const (
+	FunctionBody ExprType = iota + 1
+	StatementBlock
+	LabelBlock
+)
+
 // Resolvable defines an interface which exposes a method for
 // resolution of internal operations.
 type Resolvable interface {
@@ -30,21 +37,24 @@ type Identity interface {
 	ID() string
 }
 
-// GeoCoordinates defines a interface which returns a Location object
+// SourcePoint defines a interface which returns a Location object
 // representing area (i.e declared location, line, column, etc)
 // of implementing type.
-type GeoCoordinates interface {
+type SourcePoint interface {
 	Coordinates() *Location
 }
 
-type cloneLocation interface {
-	Clone(Location)
+// ExprSymbol defines an interface that exposes two methods
+// to retrieve the starting and ending symbol of an expression.
+type ExprSymbol interface {
+	End() string
+	Begin() string
 }
 
 // Expr defines a interface exposing a giving method.
 type Expr interface {
 	Resolvable
-	GeoCoordinates
+	SourcePoint
 }
 
 // ResolverFn defines a function type representing
@@ -113,6 +123,11 @@ func (p Annotation) ID() string {
 	return p.Name
 }
 
+// SetID sets n to Name field value.
+func (p *Annotation) SetID(n string) {
+	p.Name = n
+}
+
 // Resolve implements Resolvable interface.
 func (p *Annotation) Resolve(indexed map[string]*Package) error {
 	return nil
@@ -146,11 +161,6 @@ type Meta struct {
 	Path string
 }
 
-type commentaryDocs interface {
-	SetDoc(Doc)
-	AddDoc(Doc)
-}
-
 // Commentaries defines a struct which embodies all comments and annotations
 // associated with a declaration.
 type Commentaries struct {
@@ -182,22 +192,45 @@ type Import struct {
 	Docs    []Doc
 }
 
-// Expression provides a generic structure used to represent
+// GroupStmt provides a generic structure used to represent
 // statements, special characters, symbols and operations generated
 // from source code.
-type Expression struct {
+type GroupStmt struct {
 	Location
 	Commentaries
 
-	Value    string
-	Type     ExprType
-	Children []Expression
+	BeginSymbol string
+	EndSymbol   string
+	Type        ExprType
+	Children    []Expr
 }
 
-// Ref returns an empty string, has Expression
-// has no giving reference string.
-func (e Expression) Ref() string {
-	return ""
+// ExprType returns type value of GroupStmt.
+func (g GroupStmt) ExprType() ExprType {
+	return g.Type
+}
+
+// End returns the symbol used by GroupStmt at end of block.
+func (g GroupStmt) End() string {
+	return g.EndSymbol
+}
+
+// Begin returns the symbol used by GroupStmt at start of block.
+func (g GroupStmt) Begin() string {
+	return g.BeginSymbol
+}
+
+// Resolve takes the list of indexed packages to internal structures
+// to resolve imported or internal types that they Pathway. This is
+// used to ensure all package structures have direct link to parsed
+// type.
+func (g *GroupStmt) Resolve(indexed map[string]*Package) error {
+	for _, child := range g.Children {
+		if err := child.Resolve(indexed); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // PackageFile defines a giving package file with it's associated
@@ -415,10 +448,60 @@ func (p *ReturnsExpr) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
+// GoExpr represents giving Assign loop.
+type GoExpr struct {
+	Commentaries
+	Location
+
+	Fn *Function
+}
+
+// ID implements Identity.
+func (p GoExpr) ID() string {
+	return "go"
+}
+
+// Resolve implements Resolvable interface.
+func (p *GoExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// CHanDir defines direction type of giving declared
+// or called channel.
+type ChanDir int
+
+// types of channel direction.
+const (
+	Receiving ChanDir = iota + 1
+	Sending
+)
+
+// ChanDirExpr represents giving Assign loop.
+type ChanDirExpr struct {
+	Commentaries
+	Location
+
+	Receiver  Expr
+	Direction ChanDir
+}
+
+// ID implements Identity.
+func (p ChanDirExpr) ID() string {
+	return "Assign"
+}
+
+// Resolve implements Resolvable interface.
+func (p *ChanDirExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
 // AssignExpr represents giving Assign loop.
 type AssignExpr struct {
 	Commentaries
 	Location
+
+	Value    Expr
+	Receiver Expr
 }
 
 // ID implements Identity.
@@ -435,6 +518,9 @@ func (p *AssignExpr) Resolve(indexed map[string]*Package) error {
 type CallExpr struct {
 	Commentaries
 	Location
+
+	Called    Expr
+	Arguments []Expr
 }
 
 // ID implements Identity.
@@ -500,20 +586,39 @@ func (p *SymbolExpr) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
-// PropertyCallExpr represents giving char expression like Bracket, + , -
-// PropertyCalls used in code.
-type PropertyCallExpr struct {
+// PropertyMethodGetExpr represents the calling of a giving property field from a parent.
+type PropertyMethodGetExpr struct {
 	Commentaries
 	Location
+
+	Method *Function
 }
 
 // ID implements Identity.
-func (p PropertyCallExpr) ID() string {
-	return "PropertyCall"
+func (p PropertyMethodGetExpr) ID() string {
+	return "PropertyMethodGet"
 }
 
 // Resolve implements Resolvable interface.
-func (p *PropertyCallExpr) Resolve(indexed map[string]*Package) error {
+func (p *PropertyMethodGetExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// PropertyGetExpr represents the calling of a giving property field from a parent.
+type PropertyGetExpr struct {
+	Commentaries
+	Location
+
+	Property *Field
+}
+
+// ID implements Identity.
+func (p PropertyGetExpr) ID() string {
+	return "PropertyGet"
+}
+
+// Resolve implements Resolvable interface.
+func (p *PropertyGetExpr) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
@@ -559,10 +664,10 @@ type KeyPair struct {
 	Commentaries
 
 	// Key defines the key name used for giving key pair.
-	Key string
+	Key Expr
 
 	// Value represents type and value associated with key pair.
-	Value Identity
+	Value Expr
 }
 
 // ID implements Identity.
@@ -575,6 +680,72 @@ func (p *KeyPair) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
+// DeclaredFunction contains associated location, commentary and value details
+// of golang base types such as int, floats, strings, etc.
+type DeclaredFunction struct {
+	Commentaries
+	Location
+
+	// Fn defines declared function.
+	Fn *Function
+
+	// Text contains the string version of base type.
+	Text string
+
+	// resolver provides a means of the indexer to provide a custom resolving
+	// function which will run internal logic to set giving values
+	// appropriately during resolution of types.
+	resolver ResolverFn
+}
+
+// Resolve implements Resolvable interface.
+func (p *DeclaredFunction) Resolve(indexed map[string]*Package) error {
+	return p.resolver(indexed)
+}
+
+// DeclaredValue contains associated location, commentary and value details
+// of golang base types such as int, floats, strings, etc.
+type DeclaredValue struct {
+	Commentaries
+	Location
+
+	// Fields holds all declared field and value of a declared expression.
+	Fields map[string]Expr
+
+	// Text contains the string version of base type.
+	Text string
+
+	// resolver provides a means of the indexer to provide a custom resolving
+	// function which will run internal logic to set giving values
+	// appropriately during resolution of types.
+	resolver ResolverFn
+}
+
+// Resolve implements Resolvable interface.
+func (p *DeclaredValue) Resolve(indexed map[string]*Package) error {
+	return p.resolver(indexed)
+}
+
+// BaseValue contains associated location, commentary and value details
+// of golang base types such as int, floats, strings, etc.
+type BaseValue struct {
+	Commentaries
+	Location
+
+	// Value contains associated value of Base type.
+	Value string
+
+	// resolver provides a means of the indexer to provide a custom resolving
+	// function which will run internal logic to set giving values
+	// appropriately during resolution of types.
+	resolver ResolverFn
+}
+
+// Resolve implements Resolvable interface.
+func (p *BaseValue) Resolve(indexed map[string]*Package) error {
+	return p.resolver(indexed)
+}
+
 // Map embodies a giving map type with
 // an associated name, value and key type.
 type Map struct {
@@ -583,10 +754,6 @@ type Map struct {
 
 	// IsPointer indicates if giving variable type is a pointer.
 	IsPointer bool
-
-	// KeyPairs contains possible associated key-value elements provided
-	// to type for declarations where type has provided values.
-	KeyPairs []KeyPair
 
 	// Exported is used to indicate if type is exported or not.
 	Exported bool
@@ -639,10 +806,6 @@ type List struct {
 	// Exported is used to indicate if type is exported or not.
 	Exported bool
 
-	// Values contains possible associated value elements provided
-	// to type for declarations where type has provided values.
-	Values []Identity
-
 	// Type sets the value object/declared type.
 	Type Identity
 
@@ -672,33 +835,6 @@ func (p *List) Resolve(indexed map[string]*Package) error {
 		}
 	}
 	return nil
-}
-
-// ValueField represents a field declared with giving value
-// within a instantiated struct.
-type ValueField struct {
-	Commentaries
-	Location
-
-	// Name represents the name of giving interface.
-	Name string
-
-	// Exported is used to indicate if type is exported or not.
-	Exported bool
-
-	// Field sets the field which has giving value..
-	Field *Field
-
-	// Type sets the value object/declared type.
-	Value Identity
-
-	// Type sets the value object/declared type.
-	Type Identity
-
-	// resolver provides a means of the indexer to provide a custom resolving
-	// function which will run internal logic to set giving values
-	// appropriately during resolution of types.
-	resolver ResolverFn
 }
 
 // Channel embodies a channel type declared
@@ -737,6 +873,38 @@ func (p *Channel) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
+// DePointer represents a golang pointer dereference expression which include
+// strings, int types, floats, complex, etc, which are
+// atomic indivisible types.
+type DePointer struct {
+	Location
+	Commentaries
+
+	// Name represents the name of giving type.
+	Name string
+
+	// Elem contains associated type the star(*) is trying to dereference.
+	Elem Identity
+}
+
+// SetID sets n to Name field value.
+func (p *DePointer) SetID(n string) {
+	p.Name = n
+}
+
+// ID implements the Identity interface.
+func (p DePointer) ID() string {
+	return "*" + p.Elem.ID()
+}
+
+// Resolve takes the list of indexed packages to internal structures
+// to resolve imported or internal types that they Pathwayerence. This is
+// used to ensure all package structures have direct link to parsed
+// type.
+func (p *DePointer) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
 // Pointer represents a golang pointer types which include
 // strings, int types, floats, complex, etc, which are
 // atomic indivisible types.
@@ -747,9 +915,13 @@ type Pointer struct {
 	// Name represents the name of giving type.
 	Name string
 
-	// Value contains associated value of giving base type if
-	// is a variable.
+	// Elem contains associated type the pointer represents.
 	Elem Identity
+}
+
+// SetID sets n to Name field value.
+func (p *Pointer) SetID(n string) {
+	p.Name = n
 }
 
 // ID implements the Identity interface.
@@ -774,10 +946,6 @@ type Base struct {
 
 	// Name represents the name of giving type.
 	Name string
-
-	// Value contains associated value of giving base type if
-	// is a variable.
-	Value string
 }
 
 // BaseFor returns a new instance of Base using provided Name.
@@ -787,12 +955,9 @@ func BaseFor(baseName string) Base {
 	}
 }
 
-// BaseWith returns a new instance of Base using provided Name and value.
-func BaseWith(baseName string, value string) Base {
-	return Base{
-		Value: value,
-		Name:  baseName,
-	}
+// SetID sets n to Name field value.
+func (p *Base) SetID(n string) {
+	p.Name = n
 }
 
 // ID implements the Identity interface.
@@ -817,6 +982,9 @@ type Variable struct {
 
 	// Type sets the value object/declared type.
 	Type Identity
+
+	// Value defines giving value of variable.
+	Value interface{}
 
 	// Name represents the name of giving interface.
 	Name string
@@ -843,6 +1011,16 @@ type Variable struct {
 	// function which will run internal logic to set giving values
 	// appropriately during resolution of types.
 	resolver ResolverFn
+}
+
+// SetID sets n to Name field value.
+func (p *Variable) SetID(n string) {
+	p.Name = n
+}
+
+// ID implements Identity interface.
+func (p Variable) ID() string {
+	return p.Name
 }
 
 // Resolve takes the list of indexed packages to internal structures
@@ -892,6 +1070,11 @@ type Field struct {
 	resolver ResolverFn
 }
 
+// SetID sets n to Name field value.
+func (p *Field) SetID(n string) {
+	p.Name = n
+}
+
 // ID implements Identity interface.
 func (p Field) ID() string {
 	return p.Name
@@ -939,6 +1122,11 @@ type Parameter struct {
 	// function which will run internal logic to set giving values
 	// appropriately during resolution of types.
 	resolver ResolverFn
+}
+
+// SetID sets n to Name field value.
+func (p *Parameter) SetID(n string) {
+	p.Name = n
 }
 
 // ID implements Identity interface.
@@ -992,6 +1180,11 @@ type Type struct {
 	resolver ResolverFn
 }
 
+// SetID sets n to Name field value.
+func (p *Type) SetID(n string) {
+	p.Name = n
+}
+
 // ID implements Identity interface.
 func (p Type) ID() string {
 	return p.Name
@@ -1039,6 +1232,11 @@ type Interface struct {
 	// function which will run internal logic to set giving values
 	// appropriately during resolution of types.
 	resolver ResolverFn
+}
+
+// SetID sets n to Name field value.
+func (p *Interface) SetID(n string) {
+	p.Name = n
 }
 
 // ID implements Identity interface.
@@ -1103,6 +1301,11 @@ type Struct struct {
 	resolver ResolverFn
 }
 
+// SetID sets n to Name field value.
+func (p *Struct) SetID(n string) {
+	p.Name = n
+}
+
 // ID implements Identity interface.
 func (p Struct) ID() string {
 	return p.Name
@@ -1139,10 +1342,10 @@ type Function struct {
 	Location
 	Commentaries
 
-	// Body contains contents of Function containing
-	// all statement declared within as it's body and
-	// operation.
-	Body []Expr
+	// Body is a GroupStmt which embodies all
+	// contents of giving function body if it has
+	// one.
+	Body *GroupStmt
 
 	// Name represents the name of giving interface.
 	Name string
@@ -1156,10 +1359,6 @@ type Function struct {
 
 	// IsVariadic indicates if the last argument is variadic.
 	IsVariadic bool
-
-	// IsAsync indicates whether function is called
-	// asynchronously in goroutine.
-	IsAsync bool
 
 	// Owner sets the struct or interface which this function is attached
 	// to has a method.
@@ -1179,6 +1378,11 @@ type Function struct {
 	// function which will run internal logic to set giving values
 	// appropriately during resolution of types.
 	resolver ResolverFn
+}
+
+// SetID sets n to Name field value.
+func (p *Function) SetID(n string) {
+	p.Name = n
 }
 
 // ID implements Identity interface.
@@ -1206,10 +1410,8 @@ func (p *Function) Resolve(indexed map[string]*Package) error {
 			return err
 		}
 	}
-	for _, body := range p.Body {
-		if err := body.Resolve(indexed); err != nil {
-			return err
-		}
+	if p.Body != nil {
+		return p.Body.Resolve(indexed)
 	}
 	return nil
 }
