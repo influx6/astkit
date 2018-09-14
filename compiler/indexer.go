@@ -2478,8 +2478,6 @@ func (b *ParseScope) locateRefFromObject(parts []string, target Identity, others
 	}
 
 	switch item := target.(type) {
-	//case *Channel:
-	//	return b.locateRefFromObject(parts[1:], item.Type, others)
 	case *Field:
 		return b.locateRefFromObject(parts[1:], item.Type, others)
 	case *Interface:
@@ -2514,12 +2512,9 @@ func (b *ParseScope) locateRefFromObject(parts []string, target Identity, others
 		return nil, errors.New("unable to locate giving method from named type: %+q", parts)
 	case *Variable:
 		return b.locateRefFromObject(parts[1:], item.Type, others)
-	case *Function:
-		fmt.Printf("At function whats left: %+q\n", parts)
-		return nil, errors.New("unable to locate more fields or attributes from a function")
 	}
 
-	return nil, errors.New("unable to locate any of provided set %+q", parts)
+	return nil, errors.New("unable to locate any of provided set %+q in %T", parts, target)
 }
 
 func (b *ParseScope) locateRefFromPackage(target string, pkg string, others map[string]*Package) (Identity, error) {
