@@ -399,6 +399,11 @@ func (p *Package) Add(obj interface{}) error {
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Package) Resolve(indexed map[string]*Package) error {
+	for _, dependent := range p.Depends {
+		if err := dependent.Resolve(indexed); err != nil {
+			return err
+		}
+	}
 	for _, blank := range p.Blanks {
 		if err := blank.Resolve(indexed); err != nil {
 			return err

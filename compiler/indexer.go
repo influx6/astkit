@@ -77,11 +77,15 @@ func (indexer *Indexer) Index(ctx context.Context) (*Package, map[string]*Packag
 
 	// Call all indexed packages Resolve() method to ensure
 	// all structures are adequately referenced.
-	for _, pkg := range indexed {
-		if err := pkg.Resolve(indexed); err != nil {
-			return pkg, indexed, err
-		}
+	if err := pkg.Resolve(indexed); err != nil {
+		return pkg, indexed, err
 	}
+
+	//for _, pkg := range indexed {
+	//	if err := pkg.Resolve(indexed); err != nil {
+	//		return pkg, indexed, err
+	//	}
+	//}
 
 	indexer.waiter.Wait()
 
@@ -759,10 +763,9 @@ func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, in chan interface{}) e
 	}
 
 	fnAddr := &declr
-	owner := fn.Recv.List[0]
 
 	declr.resolver = func(others map[string]*Package) error {
-		ownerType, err := b.getTypeFromFieldExpr(owner.Type, owner, others)
+		ownerType, err := b.getTypeFromFieldExpr(target.Type, target, others)
 		if err != nil {
 			return err
 		}
@@ -1439,11 +1442,18 @@ func (b *ParseScope) transformValueFor(content interface{}, spec *ast.ValueSpec,
 		return b.transformBasicLit(item, spec, key, others)
 	case *ast.Ident:
 		return b.transformIdentValue(item, spec, key, others)
+	case *ast.FuncLit:
+		return b.transformFuncLitValue(item, spec, key, others)
+	case *ast.CompositeLit:
+		return b.transformCompositeLitValue(item, spec, key, others)
+	case *ast.SelectorExpr:
+		return b.transformSelectorValue(item, spec, key, others)
+	case *ast.CallExpr:
+		return b.transformCallExpr(item, spec, key, others)
+	case *ast.UnaryExpr:
+		return b.transformUnaryExpr(item, spec, key, others)
 	}
-
-	fmt.Printf("ValueTransformation[%T:%q]: %#v  -> %+q\n", spec.Type, key.Name, content, content)
-	//return nil, errors.New("unable to convert value type: %#v", content)
-	return nil, nil
+	return nil, errors.New("unable to convert value type: %#v", content)
 }
 
 func (b *ParseScope) transformObjectValueFor(src *ast.Object, target *ast.Ident, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (Expr, error) {
@@ -1509,6 +1519,38 @@ func (b *ParseScope) transformIdentValue(src *ast.Ident, spec *ast.ValueSpec, ke
 	}
 
 	return val, nil
+}
+
+func (b *ParseScope) transformSelectorValue(src *ast.SelectorExpr, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (*DeclaredValue, error) {
+	target, err := b.transformSelectorExpr(src, others)
+	fmt.Printf("Target: %T -> %+q \n\n", target, err)
+	var val DeclaredValue
+	return &val, nil
+}
+
+func (b *ParseScope) transformUnaryExpr(src *ast.UnaryExpr, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (*DeclaredValue, error) {
+	var val DeclaredValue
+	return &val, nil
+}
+
+func (b *ParseScope) transformCallExpr(src *ast.CallExpr, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (*DeclaredValue, error) {
+	var val DeclaredValue
+	return &val, nil
+}
+
+func (b *ParseScope) transformCompositeLitValue(src *ast.CompositeLit, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (*DeclaredValue, error) {
+	var val DeclaredValue
+	return &val, nil
+}
+
+func (b *ParseScope) transformFuncLitValue(src *ast.FuncLit, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (*Function, error) {
+	fn, err := b.transformFuncLit(src, others)
+	if err != nil {
+		return nil, err
+	}
+
+	fn.Name = key.Name
+	return &fn, nil
 }
 
 func (b *ParseScope) transformBasicLit(src *ast.BasicLit, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (*BaseValue, error) {
@@ -2332,43 +2374,73 @@ func (b *ParseScope) transformSelectorExprWithIdent(xident *ast.Ident, e *ast.Se
 		return nil, err
 	}
 
-	targetPackage, ok := others[meta.Path]
+	return b.locateRefFromPackage(selObj.Name(), meta.Path, others)
+}
+
+func (b *ParseScope) transformSelectorExprWithSelector(next *ast.SelectorExpr, parent *ast.SelectorExpr, others map[string]*Package) (Identity, error) {
+	parts, err := b.getSelectorTree(nil, next, parent, others)
+	if err != nil {
+		return nil, err
+	}
+
+	// We need to find specific import that uses giving name as import alias.
+	imp, ok := b.Package.Imports[parts[0]]
 	if !ok {
-		return nil, errors.Wrap(ErrNotFound, "unable to find package %q in indexed", meta.Path)
+		return nil, errors.New("unable to find import with alias %q", parts[0])
 	}
 
-	ref := strings.Join([]string{meta.Path, selObj.Name()}, ".")
-	if target, ok := targetPackage.Interfaces[ref]; ok {
-		return target, nil
-	}
-
-	if target, ok := targetPackage.Structs[ref]; ok {
-		return target, nil
-	}
-
-	if target, ok := targetPackage.Types[ref]; ok {
-		return target, nil
-	}
-
-	if target, ok := targetPackage.Functions[ref]; ok {
-		return target, nil
-	}
-
-	return nil, errors.Wrap(ErrNotFound, "unable to find type for %q in %q", ref, meta.Path)
+	return b.locateRefFromPathSeries(parts[1:], imp.Path, others)
 }
 
-func (b *ParseScope) transformSelectorExprWithSelector(m *ast.SelectorExpr, e *ast.SelectorExpr, others map[string]*Package) (Identity, error) {
-	return nil, errors.New("unable to handle giving ast.SelectorExpr type")
+func (b *ParseScope) getSelectorTree(parts []string, next *ast.SelectorExpr, parent *ast.SelectorExpr, others map[string]*Package) ([]string, error) {
+	if parent.Sel != nil {
+		parts = append(parts, parent.Sel.Name)
+	}
+
+	parts = append(parts, next.Sel.Name)
+
+	if next.X != nil {
+		if nextSel, ok := next.X.(*ast.SelectorExpr); ok {
+			return b.getSelectorTree(parts, nextSel, next, others)
+		}
+	}
+
+	nextIdent, ok := next.X.(*ast.Ident)
+	if !ok {
+		return parts, errors.New("expected ast.Selector.X value to be ast.Ident for last one")
+	}
+
+	// finally add the target name of expected next selector as the ast is done reverse.
+	parts = append(parts, nextIdent.Name)
+
+	if len(parts) == 2 {
+		tmp := parts[0]
+		parts[0] = parts[1]
+		parts[1] = tmp
+		return parts, nil
+	}
+
+	partLen := len(parts)
+	partRLen := partLen - 1
+	middle := partLen / 2
+	for i := 0; i < middle; i++ {
+		base := parts[i]
+		radi := parts[partRLen-i]
+		parts[i] = radi
+		parts[partRLen-i] = base
+	}
+
+	return parts, nil
 }
 
-func (b *ParseScope) transformSelectorExpr(e *ast.SelectorExpr, others map[string]*Package) (Identity, error) {
-	switch tx := e.X.(type) {
+func (b *ParseScope) transformSelectorExpr(parent *ast.SelectorExpr, others map[string]*Package) (Identity, error) {
+	switch tx := parent.X.(type) {
 	case *ast.Ident:
-		return b.transformSelectorExprWithIdent(tx, e, others)
+		return b.transformSelectorExprWithIdent(tx, parent, others)
 	case *ast.SelectorExpr:
-		return b.transformSelectorExprWithSelector(tx, e, others)
+		return b.transformSelectorExprWithSelector(tx, parent, others)
 	}
-	return nil, errors.New("unable to handle selector with type %#v", e.X)
+	return nil, errors.New("unable to handle selector with type %#v", parent.X)
 }
 
 func (b *ParseScope) transformSelectExprToMeta(e *ast.SelectorExpr, others map[string]*Package) (Meta, error) {
@@ -2388,4 +2460,102 @@ func (b *ParseScope) transformSelectExprToMeta(e *ast.SelectorExpr, others map[s
 
 	meta.Path = imp.Path
 	return meta, nil
+}
+
+func (b *ParseScope) locateRefFromPathSeries(parts []string, pkg string, others map[string]*Package) (Identity, error) {
+	base, err := b.locateRefFromPackage(parts[0], pkg, others)
+	if err != nil {
+		return nil, err
+	}
+
+	return b.locateRefFromObject(parts[1:], base, others)
+}
+
+func (b *ParseScope) locateRefFromObject(parts []string, target Identity, others map[string]*Package) (Identity, error) {
+	fmt.Printf("Target: %T : %+q\n", target, parts)
+	if len(parts) == 0 {
+		return target, nil
+	}
+
+	switch item := target.(type) {
+	//case *Channel:
+	//	return b.locateRefFromObject(parts[1:], item.Type, others)
+	case *Field:
+		return b.locateRefFromObject(parts[1:], item.Type, others)
+	case *Interface:
+		if fn, ok := item.Methods[parts[0]]; ok {
+			return b.locateRefFromObject(parts[1:], &fn, others)
+		}
+		return nil, errors.New("unable to locate giving method from interface: %+q", parts)
+	case *Struct:
+		if fn, ok := item.Methods[parts[0]]; ok {
+			return b.locateRefFromObject(parts[1:], &fn, others)
+		}
+		if fn, ok := item.Fields[parts[0]]; ok {
+			return b.locateRefFromObject(parts[1:], &fn, others)
+		}
+		for _, fl := range item.Composes {
+			if fl.Name != parts[0] {
+				continue
+			}
+			return b.locateRefFromObject(parts[1:], &fl, others)
+		}
+		for name, fl := range item.Embeds {
+			if name != parts[0] {
+				continue
+			}
+			return b.locateRefFromObject(parts[1:], fl, others)
+		}
+		return nil, errors.New("unable to locate giving method or field from struct: %+q", parts)
+	case *Type:
+		if fn, ok := item.Methods[parts[0]]; ok {
+			return b.locateRefFromObject(parts[1:], &fn, others)
+		}
+		return nil, errors.New("unable to locate giving method from named type: %+q", parts)
+	case *Variable:
+		return b.locateRefFromObject(parts[1:], item.Type, others)
+	case *Function:
+		fmt.Printf("At function whats left: %+q\n", parts)
+		return nil, errors.New("unable to locate more fields or attributes from a function")
+	}
+
+	return nil, errors.New("unable to locate any of provided set %+q", parts)
+}
+
+func (b *ParseScope) locateRefFromPackage(target string, pkg string, others map[string]*Package) (Identity, error) {
+	targetPackage, ok := others[pkg]
+	if !ok {
+		return nil, errors.Wrap(ErrNotFound, "unable to find package %q in indexed", pkg)
+	}
+
+	ref := strings.Join([]string{pkg, target}, ".")
+	if target, ok := targetPackage.Interfaces[ref]; ok {
+		return target, nil
+	}
+
+	if target, ok := targetPackage.Structs[ref]; ok {
+		return target, nil
+	}
+
+	if target, ok := targetPackage.Types[ref]; ok {
+		return target, nil
+	}
+
+	if target, ok := targetPackage.Functions[ref]; ok {
+		return target, nil
+	}
+
+	if target, ok := targetPackage.Methods[ref]; ok {
+		return target, nil
+	}
+
+	if target, ok := targetPackage.Variables[ref]; ok {
+		return target, nil
+	}
+
+	if target, ok := targetPackage.Constants[ref]; ok {
+		return target, nil
+	}
+
+	return nil, errors.Wrap(ErrNotFound, "unable to find type for %q in %q", ref, pkg)
 }
