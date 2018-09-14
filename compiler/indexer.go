@@ -1521,11 +1521,19 @@ func (b *ParseScope) transformIdentValue(src *ast.Ident, spec *ast.ValueSpec, ke
 	return val, nil
 }
 
-func (b *ParseScope) transformSelectorValue(src *ast.SelectorExpr, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (*DeclaredValue, error) {
+func (b *ParseScope) transformSelectorValue(src *ast.SelectorExpr, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (Expr, error) {
 	target, err := b.transformSelectorExpr(src, others)
-	fmt.Printf("Target: %T -> %+q \n\n", target, err)
-	var val DeclaredValue
-	return &val, nil
+	if err != nil {
+		// TODO: Return error after resolving UnaryExpr and CompositeExpr.
+		fmt.Printf("Target: %T -> %+q \n\n", target, err)
+		return nil, nil
+	}
+
+	if expr, ok := target.(Expr); ok {
+		return expr, nil
+	}
+
+	return nil, errors.New("returned type %T does not implement the Expr interface")
 }
 
 func (b *ParseScope) transformUnaryExpr(src *ast.UnaryExpr, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (*DeclaredValue, error) {
@@ -2472,7 +2480,6 @@ func (b *ParseScope) locateRefFromPathSeries(parts []string, pkg string, others 
 }
 
 func (b *ParseScope) locateRefFromObject(parts []string, target Identity, others map[string]*Package) (Identity, error) {
-	fmt.Printf("Target: %T : %+q\n", target, parts)
 	if len(parts) == 0 {
 		return target, nil
 	}
