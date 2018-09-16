@@ -438,7 +438,7 @@ func (p *Package) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
-// ReturnsExpr represents giving Returns loop.
+// ReturnsExpr represents a giving return statement.
 type ReturnsExpr struct {
 	Commentaries
 	Location
@@ -454,7 +454,7 @@ func (p *ReturnsExpr) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
-// GoExpr represents giving Assign loop.
+// GoExpr represents giving function passed into a goroutine using the "go" keyword.
 type GoExpr struct {
 	Commentaries
 	Location
@@ -482,13 +482,13 @@ const (
 	Sending
 )
 
-// ChanDirExpr represents giving Assign loop.
+// ChanDirExpr represents giving Assign expression.
 type ChanDirExpr struct {
 	Commentaries
 	Location
 
-	Receiver  Identity
-	Direction ChanDir
+	Dir      ChanDir
+	Receiver Identity
 }
 
 // ID implements Identity.
@@ -501,7 +501,7 @@ func (p *ChanDirExpr) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
-// AssignExpr represents giving Assign loop.
+// AssignExpr represents giving Assign expression.
 type AssignExpr struct {
 	Commentaries
 	Location
@@ -520,7 +520,7 @@ func (p *AssignExpr) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
-// CallExpr represents giving Call loop.
+// CallExpr represents giving Call expression.
 type CallExpr struct {
 	Commentaries
 	Location
@@ -539,7 +539,7 @@ func (p *CallExpr) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
-// RangeExpr represents giving Range loop.
+// RangeExpr represents giving Range expression.
 type RangeExpr struct {
 	Commentaries
 	Location
@@ -555,7 +555,7 @@ func (p *RangeExpr) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
-// ForExpr represents giving for loop.
+// ForExpr represents giving for expression.
 type ForExpr struct {
 	Commentaries
 	Location
@@ -568,6 +568,44 @@ func (p ForExpr) ID() string {
 
 // Resolve implements Resolvable interface.
 func (p *ForExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// ParenExpr represents giving Range expression.
+type ParenExpr struct {
+	Commentaries
+	Location
+
+	Elem Identity
+}
+
+// ID implements Identity.
+func (p ParenExpr) ID() string {
+	return "ParenExpr"
+}
+
+// Resolve implements Resolvable interface.
+func (p *ParenExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// BinaryExpr represents giving Range expression.
+type BinaryExpr struct {
+	Commentaries
+	Location
+
+	Op    string
+	Left  Identity
+	Right Identity
+}
+
+// ID implements Identity.
+func (p BinaryExpr) ID() string {
+	return p.Op
+}
+
+// Resolve implements Resolvable interface.
+func (p *BinaryExpr) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
@@ -755,6 +793,9 @@ func (p *DeclaredStructValue) Resolve(indexed map[string]*Package) error {
 type DeclaredListValue struct {
 	Commentaries
 	Location
+
+	// Length sets giving length of list.
+	Length int64
 
 	// Text contains the string version of base type.
 	Text string

@@ -1,6 +1,8 @@
 package sudo
 
 import (
+	"fmt"
+
 	"github.com/gokit/astkit/testbed/sudo/api"
 )
 
@@ -214,13 +216,13 @@ type Wiko2 chan func() []string
 type Fna func(string) (int, error)
 
 func Bang(m string, p api.Rx) {
-	print("Map : %s : %d", m, p)
+	fmt.Printf("Map : %s : %d", m, p)
 }
 
 func Hello(n string, pos api.Rx, v api.Wilk) {
 	bu := map[string]string{"sasd": n}
 	for index, elem := range bu {
-		print("Map : %s : %d", index, elem)
+		fmt.Printf("Map : %s : %d", index, elem)
 	}
 }
 
@@ -254,17 +256,27 @@ type Function struct {
 	rename    string
 }
 
+func (f Function) Ring(n ...string) {
+	set := make(chan string, len(n))
+	for _, e := range n {
+		set <- e
+	}
+	for range set {
+	}
+}
+
 func (f Function) hello(n string, v, u string, m int) {
 	bu := []string{"sasd", n}
 	{
+	foop:
 		for i := 0; i < len(bu); i++ {
-			print("List : %s", bu[i])
-			continue
+			fmt.Printf("List : %s", bu[i])
+			continue foop
 		}
 	}
 
 	mx := bu[0:]
-	print("Bog: %q", mx)
+	fmt.Printf("Bog: %q", mx)
 }
 
 // Functioner interface
@@ -297,6 +309,6 @@ type FunctionResult struct {
 
 func (f FunctionResult) hello(fn Functioner) {
 	var name string
-	print("Name : %s", name)
+	fmt.Printf("Name : %s", name)
 	fn.IsVariadic()
 }
