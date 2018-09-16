@@ -39,6 +39,30 @@ var (
 		Name: "Whaterball",
 	}
 
+	pengu2 = api.Wilk{
+		"Whaterball",
+	}
+
+	pengu3 = []api.Wilk{
+		{
+			Name: "Whaterball",
+		},
+	}
+
+	rambo2 = api.Crucker{
+		Name: "Whaterball",
+	}
+
+	vambo2 = api.Cracker{
+		"Whaterball",
+	}
+
+	rambo = []api.Crucker{
+		{
+			Name: "Whaterball",
+		},
+	}
+
 	vko = api.Wilk.Raize
 
 	ghjio = api.Wx.Ball
@@ -71,6 +95,8 @@ var (
 
 	vikvi2 chan struct{} = make(chan struct{}, 0)
 
+	muko = api.Recless("sentry")
+
 	nik = func() {}
 
 	dih = hji()
@@ -86,12 +112,40 @@ var (
 
 	friz = []string{"one", "two", "four"}
 
-	keno = struct {
+	momba = struct {
 		Name string `json:"name"`
 		Age  int
 	}{
+		Name: "Rix",
+	}
+
+	momba2 = struct {
+		Name, Date string
+		Age        int
+	}{
+		Name: "Rix",
+		Date: "21-32-2019",
+	}
+
+	keno = struct {
+		Name, Date string
+		Age        int
+	}{
 		"Rix",
+		"12-54-1211",
 		20,
+	}
+
+	hlemon2 = Lemonode{
+		Memo{We: "we"},
+		"4343343",
+		"way",
+		"Deuc",
+	}
+
+	hlemon = Lemon{
+		Name: "Lemon",
+		Memo: Memo{We: "we"},
 	}
 
 	kul = []struct {
@@ -169,6 +223,19 @@ func Hello(n string, pos api.Rx, v api.Wilk) {
 		print("Map : %s : %d", index, elem)
 	}
 }
+
+type Memo struct {
+	We string
+}
+
+type Lemon struct {
+	Memo
+	Id   string
+	Path string
+	Name string
+}
+
+type Lemonode Lemon
 
 type Function struct {
 	id        string

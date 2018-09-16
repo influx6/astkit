@@ -51,12 +51,6 @@ type ExprSymbol interface {
 	Begin() string
 }
 
-// Expr defines a interface exposing a giving method.
-type Expr interface {
-	Resolvable
-	SourcePoint
-}
-
 // ResolverFn defines a function type representing
 // a function taking in a map of packages, returning
 // an error.
@@ -202,7 +196,7 @@ type GroupStmt struct {
 	BeginSymbol string
 	EndSymbol   string
 	Type        ExprType
-	Children    []Expr
+	Children    []Identity
 }
 
 // ExprType returns type value of GroupStmt.
@@ -226,8 +220,10 @@ func (g GroupStmt) Begin() string {
 // type.
 func (g *GroupStmt) Resolve(indexed map[string]*Package) error {
 	for _, child := range g.Children {
-		if err := child.Resolve(indexed); err != nil {
-			return err
+		if rs, ok := child.(Resolvable); ok {
+			if err := rs.Resolve(indexed); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -254,6 +250,7 @@ type Package struct {
 	Docs       []Doc
 	Blanks     []Variable
 	BadDeclrs  []BadExpr
+	Depends    []*Package
 	Variables  map[string]*Variable
 	Constants  map[string]*Variable
 	Types      map[string]*Type
@@ -261,7 +258,6 @@ type Package struct {
 	Interfaces map[string]*Interface
 	Functions  map[string]*Function
 	Methods    map[string]*Function
-	Depends    map[string]*Package
 	Files      map[string]*PackageFile
 }
 
@@ -341,12 +337,12 @@ func (p *Package) GetMethodFor(typeName string, methodName string) (*Function, e
 // types according to it's class.
 func (p *Package) Add(obj interface{}) error {
 	switch elem := obj.(type) {
-	case BadExpr:
-		p.BadDeclrs = append(p.BadDeclrs, elem)
 	case Doc:
 		p.Docs = append(p.Docs, elem)
 	case *Package:
-		p.Depends[elem.Name] = elem
+		p.Depends = append(p.Depends, elem)
+	case BadExpr:
+		p.BadDeclrs = append(p.BadDeclrs, elem)
 	case Type:
 		p.Types[elem.Addr()] = &elem
 	case Interface:
@@ -366,11 +362,11 @@ func (p *Package) Add(obj interface{}) error {
 		}
 
 		if elem.Constant {
-			p.Constants[elem.Name] = &elem
+			p.Constants[elem.Addr()] = &elem
 			return nil
 		}
 
-		p.Variables[elem.Name] = &elem
+		p.Variables[elem.Addr()] = &elem
 	case *Type:
 		p.Types[elem.Addr()] = elem
 	case *Interface:
@@ -389,7 +385,12 @@ func (p *Package) Add(obj interface{}) error {
 			return nil
 		}
 
-		p.Variables[elem.Name] = elem
+		if elem.Constant {
+			p.Constants[elem.Addr()] = elem
+			return nil
+		}
+
+		p.Variables[elem.Addr()] = elem
 	}
 	return nil
 }
@@ -486,7 +487,7 @@ type ChanDirExpr struct {
 	Commentaries
 	Location
 
-	Receiver  Expr
+	Receiver  Identity
 	Direction ChanDir
 }
 
@@ -505,8 +506,8 @@ type AssignExpr struct {
 	Commentaries
 	Location
 
-	Value    Expr
-	Receiver Expr
+	Value    Identity
+	Receiver Identity
 }
 
 // ID implements Identity.
@@ -524,13 +525,13 @@ type CallExpr struct {
 	Commentaries
 	Location
 
-	Called    Expr
-	Arguments []Expr
+	Func      Identity
+	Arguments []Identity
 }
 
 // ID implements Identity.
 func (p CallExpr) ID() string {
-	return "Call"
+	return p.Func.ID()
 }
 
 // Resolve implements Resolvable interface.
@@ -663,62 +664,37 @@ func (p *BadExpr) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
-// KeyPair represents a key-value pair declaration.
-type KeyPair struct {
+// KeyValuePair represents a key-value pair declaration usually in
+// a map.
+type KeyValuePair struct {
 	Location
 	Commentaries
 
 	// Key defines the key name used for giving key pair.
-	Key Expr
+	Key Identity
 
 	// Value represents type and value associated with key pair.
-	Value Expr
+	Value Identity
 }
 
 // ID implements Identity.
-func (p KeyPair) ID() string {
+func (p KeyValuePair) ID() string {
 	return "KeyPair"
 }
 
 // Resolve implements Resolvable interface.
-func (p *KeyPair) Resolve(indexed map[string]*Package) error {
+func (p *KeyValuePair) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
-// DeclaredFunction contains associated location, commentary and value details
-// of golang base types such as int, floats, strings, etc.
-type DeclaredFunction struct {
-	Commentaries
-	Location
-
-	// Fn defines declared function.
-	Fn *Function
-
-	// Text contains the string version of base type.
-	Text string
-
-	// resolver provides a means of the indexer to provide a custom resolving
-	// function which will run internal logic to set giving values
-	// appropriately during resolution of types.
-	resolver ResolverFn
-}
-
-// Resolve implements Resolvable interface.
-func (p *DeclaredFunction) Resolve(indexed map[string]*Package) error {
-	return p.resolver(indexed)
-}
-
-// DeclaredValue contains associated location, commentary and value details
-// of golang base types such as int, floats, strings, etc.
+// DeclaredValue contains contents of declared type with
+// associated value list.
 type DeclaredValue struct {
 	Commentaries
 	Location
 
 	// Fields holds all declared field and value of a declared expression.
-	Fields map[string]Expr
-
-	// Text contains the string version of base type.
-	Text string
+	Values []Identity
 
 	// resolver provides a means of the indexer to provide a custom resolving
 	// function which will run internal logic to set giving values
@@ -726,8 +702,107 @@ type DeclaredValue struct {
 	resolver ResolverFn
 }
 
+// ID implements Identity.
+func (p DeclaredValue) ID() string {
+	return ""
+}
+
 // Resolve implements Resolvable interface.
 func (p *DeclaredValue) Resolve(indexed map[string]*Package) error {
+	return p.resolver(indexed)
+}
+
+// DeclaredStructValue represent a giving declared struct where only values
+// are declared in the order of it's field ordering. This is specifically
+// for when a struct being initialized has no field name used.
+type DeclaredStructValue struct {
+	Commentaries
+	Location
+
+	// ValuesOnly sets a flag whether giving struct values
+	// are set using field names and values or values only.
+	// This will indicate to user that either DeclaredStructValue.Values
+	// or DeclaredStructValue.Fields contains values for struct field.
+	ValuesOnly bool
+
+	// Values contains all values provided according to declaration
+	// order when a struct field values are supplied without using
+	// the field name.  {"Bob", "Juge"}
+	Values []Identity
+
+	// Fields contains all values and field names declared in the
+	// format e.g {Name:"Bob", Addr:"Juge"}.
+	Fields map[string]Identity
+
+	// resolver provides a means of the indexer to provide a custom resolving
+	// function which will run internal logic to set giving values
+	// appropriately during resolution of types.
+	resolver ResolverFn
+}
+
+// ID implements Identity.
+func (p DeclaredStructValue) ID() string {
+	return ""
+}
+
+// Resolve implements Resolvable interface.
+func (p *DeclaredStructValue) Resolve(indexed map[string]*Package) error {
+	return p.resolver(indexed)
+}
+
+// DeclaredListValue contains associated location, commentary and value details
+// of golang base types such as int, floats, strings, etc.
+type DeclaredListValue struct {
+	Commentaries
+	Location
+
+	// Text contains the string version of base type.
+	Text string
+
+	// Fields holds all declared field and value of a declared expression.
+	Values []Identity
+
+	// resolver provides a means of the indexer to provide a custom resolving
+	// function which will run internal logic to set giving values
+	// appropriately during resolution of types.
+	resolver ResolverFn
+}
+
+// ID implements Identity.
+func (p DeclaredListValue) ID() string {
+	return p.Text
+}
+
+// Resolve implements Resolvable interface.
+func (p *DeclaredListValue) Resolve(indexed map[string]*Package) error {
+	return p.resolver(indexed)
+}
+
+// DeclaredMapValue contains associated location, commentary and value details
+// of golang base types such as int, floats, strings, etc.
+type DeclaredMapValue struct {
+	Commentaries
+	Location
+
+	// Text contains the string version of base type.
+	Text string
+
+	// Fields holds all declared field and value of a declared expression.
+	KeyValues []KeyValuePair
+
+	// resolver provides a means of the indexer to provide a custom resolving
+	// function which will run internal logic to set giving values
+	// appropriately during resolution of types.
+	resolver ResolverFn
+}
+
+// ID implements Identity.
+func (p DeclaredMapValue) ID() string {
+	return p.Text
+}
+
+// Resolve implements Resolvable interface.
+func (p *DeclaredMapValue) Resolve(indexed map[string]*Package) error {
 	return p.resolver(indexed)
 }
 
@@ -744,6 +819,11 @@ type BaseValue struct {
 	// function which will run internal logic to set giving values
 	// appropriately during resolution of types.
 	resolver ResolverFn
+}
+
+// ID implements Identity.
+func (p BaseValue) ID() string {
+	return p.Value
 }
 
 // Resolve implements Resolvable interface.
@@ -907,6 +987,66 @@ func (p DePointer) ID() string {
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *DePointer) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// OpOf represents a golang type which is being applied
+// an operation using a operator prefix, which means to get pointer of type.
+type OpOf struct {
+	Location
+	Commentaries
+
+	// Op represent the giving Op being applied to giving entitiy.
+	Op string
+
+	// OpFlag represents the value used by token.Token type as a int.
+	OpFlag int
+
+	// Elem contains associated type the pointer represents.
+	Elem Identity
+}
+
+// ID implements the Identity interface.
+func (p OpOf) ID() string {
+	return p.Op + p.Elem.ID()
+}
+
+// Resolve takes the list of indexed packages to internal structures
+// to resolve imported or internal types that they Pathwayerence. This is
+// used to ensure all package structures have direct link to parsed
+// type.
+func (p *OpOf) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// AddressOf represents a golang type which is being assigned
+// using the & prefix, which means to get pointer of type.
+type AddressOf struct {
+	Location
+	Commentaries
+
+	// Name represents the name of giving type.
+	Name string
+
+	// Elem contains associated type the pointer represents.
+	Elem Identity
+}
+
+// SetID sets n to Name field value.
+func (p *AddressOf) SetID(n string) {
+	p.Name = n
+}
+
+// ID implements the Identity interface.
+func (p AddressOf) ID() string {
+	return "*" + p.Elem.ID()
+}
+
+// Resolve takes the list of indexed packages to internal structures
+// to resolve imported or internal types that they Pathwayerence. This is
+// used to ensure all package structures have direct link to parsed
+// type.
+func (p *AddressOf) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 

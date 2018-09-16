@@ -1,7 +1,6 @@
 package compiler
 
 import (
-	"fmt"
 	"go/ast"
 	"go/token"
 	"go/types"
@@ -81,12 +80,6 @@ func (indexer *Indexer) Index(ctx context.Context) (*Package, map[string]*Packag
 		return pkg, indexed, err
 	}
 
-	//for _, pkg := range indexed {
-	//	if err := pkg.Resolve(indexed); err != nil {
-	//		return pkg, indexed, err
-	//	}
-	//}
-
 	indexer.waiter.Wait()
 
 	return pkg, indexed, nil
@@ -100,8 +93,8 @@ func (indexer *Indexer) indexPackage(ctx context.Context, targetPackage string, 
 		Name:       targetPackage,
 		Types:      map[string]*Type{},
 		Structs:    map[string]*Struct{},
-		Depends:    map[string]*Package{},
 		Variables:  map[string]*Variable{},
+		Constants:  map[string]*Variable{},
 		Functions:  map[string]*Function{},
 		Methods:    map[string]*Function{},
 		Interfaces: map[string]*Interface{},
@@ -874,6 +867,26 @@ func (b *ParseScope) handleFunctionFieldList(ownerName string, set *ast.FieldLis
 	return params, nil
 }
 
+//func (b *ParseScope) findInFieldList(targetName string, set *ast.FieldList) (ast.Ident, ast.Field, error) {
+//	for _, param := range set.List {
+//		if len(param.Names) == 0 {
+//			continue
+//		}
+//
+//		// If we have name as a named Field or named return then
+//		// appropriately
+//		for _, name := range param.Names {
+//			p, err := b.handleFieldWithName(ownerName, param, name, param.Type)
+//			if err != nil {
+//				return params, err
+//			}
+//
+//			params = append(params, p)
+//		}
+//	}
+//	return params, nil
+//}
+
 func (b *ParseScope) handleFieldList(ownerName string, set *ast.FieldList) ([]Field, error) {
 	var params []Field
 	for _, param := range set.List {
@@ -1436,7 +1449,7 @@ func (b *ParseScope) getTypeFromValueExpr(f *ast.Ident, v *ast.ValueSpec, others
 	return base, nil
 }
 
-func (b *ParseScope) transformValueFor(content interface{}, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformValueFor(content interface{}, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (Identity, error) {
 	switch item := content.(type) {
 	case *ast.BasicLit:
 		return b.transformBasicLit(item, spec, key, others)
@@ -1452,11 +1465,41 @@ func (b *ParseScope) transformValueFor(content interface{}, spec *ast.ValueSpec,
 		return b.transformCallExpr(item, spec, key, others)
 	case *ast.UnaryExpr:
 		return b.transformUnaryExpr(item, spec, key, others)
+	case *ast.KeyValueExpr:
+		return b.transformKeyValuePair(item, spec, key, others)
 	}
-	return nil, errors.New("unable to convert value type: %#v", content)
+	return b.transformTypeFor(content, others)
 }
 
-func (b *ParseScope) transformObjectValueFor(src *ast.Object, target *ast.Ident, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformKeyValuePair(src *ast.KeyValueExpr, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (Identity, error) {
+	var pair KeyValuePair
+
+	nkey, err := b.transformValueFor(src.Key, spec, key, others)
+	if err != nil {
+		return nil, err
+	}
+
+	pair.Key = nkey
+
+	value, err := b.transformValueFor(src.Value, spec, key, others)
+	if err != nil {
+		return nil, err
+	}
+
+	pair.Value = value
+
+	return &pair, nil
+}
+
+func (b *ParseScope) transformObjectValueFor(src *ast.Object, target *ast.Ident, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (Identity, error) {
+	if pointingObj := b.Info.ObjectOf(target); pointingObj != nil {
+		if pointingObj.Pkg() != nil {
+			if ref, err := b.locateRefFromPackage(pointingObj.Name(), pointingObj.Pkg().Path(), others); err == nil {
+				return ref, nil
+			}
+		}
+	}
+
 	switch item := src.Decl.(type) {
 	case *ast.ValueSpec:
 		return b.transformAssignedValueSpec(item, target, others)
@@ -1464,7 +1507,7 @@ func (b *ParseScope) transformObjectValueFor(src *ast.Object, target *ast.Ident,
 	return nil, errors.New("unable to transform assigend value type: %#v", src.Decl)
 }
 
-func (b *ParseScope) transformAssignedValueSpec(spec *ast.ValueSpec, src *ast.Ident, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformAssignedValueSpec(spec *ast.ValueSpec, src *ast.Ident, others map[string]*Package) (Identity, error) {
 	if len(spec.Names) == 0 {
 		return nil, errors.New("ast.ValueSpec.Names must have atleast a item in list")
 	}
@@ -1489,7 +1532,7 @@ func (b *ParseScope) transformAssignedValueSpec(spec *ast.ValueSpec, src *ast.Id
 	return b.transformValueFor(targetValue, spec, targetIdent, others)
 }
 
-func (b *ParseScope) transformIdentValue(src *ast.Ident, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformIdentValue(src *ast.Ident, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (Identity, error) {
 	if src.Obj != nil {
 		return b.transformObjectValueFor(src.Obj, src, spec, key, others)
 	}
@@ -1521,34 +1564,309 @@ func (b *ParseScope) transformIdentValue(src *ast.Ident, spec *ast.ValueSpec, ke
 	return val, nil
 }
 
-func (b *ParseScope) transformSelectorValue(src *ast.SelectorExpr, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformSelectorValue(src *ast.SelectorExpr, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (Identity, error) {
 	target, err := b.transformSelectorExpr(src, others)
 	if err != nil {
-		// TODO: Return error after resolving UnaryExpr and CompositeExpr.
-		fmt.Printf("Target: %T -> %+q \n\n", target, err)
-		return nil, nil
+		return nil, err
+	}
+	return target, nil
+}
+
+func (b *ParseScope) transformUnaryExpr(src *ast.UnaryExpr, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (Identity, error) {
+	base, err := b.transformValueFor(src.X, spec, key, others)
+	if err != nil {
+		return nil, err
 	}
 
-	if expr, ok := target.(Expr); ok {
-		return expr, nil
+	if src.Op != token.AND {
+		var op OpOf
+		op.Elem = base
+		op.OpFlag = int(src.Op)
+		op.Op = src.Op.String()
+
+		// read location information(line, column, source text etc) for giving type.
+		op.Location = b.getLocation(src.Pos(), src.End())
+
+		return &op, nil
 	}
 
-	return nil, errors.New("returned type %T does not implement the Expr interface")
-}
+	var val AddressOf
+	val.Elem = base
+	val.Name = base.ID()
 
-func (b *ParseScope) transformUnaryExpr(src *ast.UnaryExpr, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (*DeclaredValue, error) {
-	var val DeclaredValue
+	// read location information(line, column, source text etc) for giving type.
+	val.Location = b.getLocation(src.Pos(), src.End())
+
 	return &val, nil
 }
 
-func (b *ParseScope) transformCallExpr(src *ast.CallExpr, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (*DeclaredValue, error) {
-	var val DeclaredValue
+func (b *ParseScope) transformCallExpr(src *ast.CallExpr, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (*CallExpr, error) {
+	var val CallExpr
+	val.Location = b.getLocation(src.Pos(), src.End())
+
+	fn, err := b.transformTypeFor(src.Fun, others)
+	if err != nil {
+		return nil, err
+	}
+
+	val.Func = fn
+
+	for _, item := range src.Args {
+		used, err := b.transformTypeFor(item, others)
+		if err != nil {
+			return nil, err
+		}
+		val.Arguments = append(val.Arguments, used)
+	}
+
 	return &val, nil
 }
 
-func (b *ParseScope) transformCompositeLitValue(src *ast.CompositeLit, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (*DeclaredValue, error) {
-	var val DeclaredValue
+func (b *ParseScope) transformCompositeLitValue(src *ast.CompositeLit, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (Identity, error) {
+	if src.Type == nil {
+		return b.transformNoTypeComposite(src, spec, key, others)
+	}
+
+	switch elem := src.Type.(type) {
+	case *ast.Ident:
+		return b.transformIdentComposite(elem, src, spec, key, others)
+	case *ast.SelectorExpr:
+		return b.transformSelectorComposite(elem, src, spec, key, others)
+	case *ast.StructType:
+		return b.transformStructComposite(elem, src, spec, key, others)
+	case *ast.ArrayType:
+		return b.transformArrayComposite(elem, src, spec, key, others)
+	case *ast.MapType:
+		return b.transformMapComposite(elem, src, spec, key, others)
+	}
+	return nil, errors.New("unable to handle ast.Composite type %T %#v", src.Type, src)
+}
+
+func (b *ParseScope) transformMapTypeComposite(tl *types.Map, src *ast.CompositeLit, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (*DeclaredMapValue, error) {
+	var val DeclaredMapValue
+	val.Location = b.getLocation(src.Pos(), src.End())
+
+	if len(src.Elts) == 0 {
+		return &val, nil
+	}
+
+	for _, elem := range src.Elts {
+		kv, ok := elem.(*ast.KeyValueExpr)
+		if !ok {
+			return nil, errors.New("CompositeLit for Map type must have KeyValueExpr as children")
+		}
+
+		pk, err := b.transformValueFor(kv.Key, spec, key, others)
+		if err != nil {
+			return nil, err
+		}
+
+		pv, err := b.transformValueFor(kv.Value, spec, key, others)
+		if err != nil {
+			return nil, err
+		}
+
+		val.KeyValues = append(val.KeyValues, KeyValuePair{Key: pk, Value: pv})
+	}
+
 	return &val, nil
+}
+
+func (b *ParseScope) transformMapComposite(tl *ast.MapType, src *ast.CompositeLit, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (*DeclaredMapValue, error) {
+	var val DeclaredMapValue
+	val.Location = b.getLocation(src.Pos(), src.End())
+
+	if len(src.Elts) == 0 {
+		return &val, nil
+	}
+
+	for _, elem := range src.Elts {
+		kv, ok := elem.(*ast.KeyValueExpr)
+		if !ok {
+			return nil, errors.New("CompositeLit for Map type must have KeyValueExpr as children")
+		}
+
+		pk, err := b.transformValueFor(kv.Key, spec, key, others)
+		if err != nil {
+			return nil, err
+		}
+
+		pv, err := b.transformValueFor(kv.Value, spec, key, others)
+		if err != nil {
+			return nil, err
+		}
+
+		val.KeyValues = append(val.KeyValues, KeyValuePair{Key: pk, Value: pv})
+	}
+
+	return &val, nil
+}
+
+func (b *ParseScope) transformNoTypeComposite(src *ast.CompositeLit, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (*DeclaredValue, error) {
+	var val DeclaredValue
+	val.Location = b.getLocation(src.Pos(), src.End())
+
+	if len(src.Elts) == 0 {
+		return &val, nil
+	}
+
+	for _, elem := range src.Elts {
+		item, err := b.transformValueFor(elem, spec, key, others)
+		if err != nil {
+			return nil, err
+		}
+		val.Values = append(val.Values, item)
+	}
+
+	return &val, nil
+}
+
+func (b *ParseScope) transformArrayComposite(tl *ast.ArrayType, src *ast.CompositeLit, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (*DeclaredListValue, error) {
+	var val DeclaredListValue
+	val.Location = b.getLocation(src.Pos(), src.End())
+
+	if len(src.Elts) == 0 {
+		return &val, nil
+	}
+
+	for _, elem := range src.Elts {
+		item, err := b.transformValueFor(elem, spec, key, others)
+		if err != nil {
+			return nil, err
+		}
+		val.Values = append(val.Values, item)
+	}
+
+	return &val, nil
+}
+
+func (b *ParseScope) transformSliceTypeComposite(tl *types.Slice, src *ast.CompositeLit, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (*DeclaredListValue, error) {
+	var val DeclaredListValue
+	val.Location = b.getLocation(src.Pos(), src.End())
+
+	if len(src.Elts) == 0 {
+		return &val, nil
+	}
+
+	for _, elem := range src.Elts {
+		item, err := b.transformValueFor(elem, spec, key, others)
+		if err != nil {
+			return nil, err
+		}
+		val.Values = append(val.Values, item)
+	}
+
+	return &val, nil
+}
+
+func (b *ParseScope) transformStructTypeComposite(tl *types.Struct, src *ast.CompositeLit, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (*DeclaredStructValue, error) {
+	var val DeclaredStructValue
+	val.Fields = map[string]Identity{}
+	val.Location = b.getLocation(src.Pos(), src.End())
+
+	if len(src.Elts) == 0 {
+		return &val, nil
+	}
+
+	for _, elem := range src.Elts {
+		switch belem := elem.(type) {
+		case *ast.BasicLit:
+			val.ValuesOnly = true
+			member, err := b.transformValueFor(belem, spec, key, others)
+			if err != nil {
+				return nil, err
+			}
+			val.Values = append(val.Values, member)
+		case *ast.KeyValueExpr:
+			fieldName, ok := belem.Key.(*ast.Ident)
+			if !ok {
+				return nil, errors.New("ast.KeyValueExpr should be a *ast.Ident: %#v", belem.Key)
+			}
+
+			fieldVal, err := b.transformValueFor(belem.Value, spec, fieldName, others)
+			if err != nil {
+				return nil, err
+			}
+
+			val.Fields[fieldName.Name] = fieldVal
+		}
+	}
+
+	return &val, nil
+}
+
+func (b *ParseScope) transformStructComposite(tl *ast.StructType, src *ast.CompositeLit, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (*DeclaredStructValue, error) {
+	var val DeclaredStructValue
+	val.Fields = map[string]Identity{}
+	val.Location = b.getLocation(src.Pos(), src.End())
+
+	if len(src.Elts) == 0 {
+		return &val, nil
+	}
+
+	for _, elem := range src.Elts {
+		switch belem := elem.(type) {
+		case *ast.BasicLit:
+			val.ValuesOnly = true
+			member, err := b.transformValueFor(belem, spec, key, others)
+			if err != nil {
+				return nil, err
+			}
+			val.Values = append(val.Values, member)
+		case *ast.KeyValueExpr:
+			fieldName, ok := belem.Key.(*ast.Ident)
+			if !ok {
+				return nil, errors.New("ast.KeyValueExpr should be a *ast.Ident: %#v", belem.Key)
+			}
+
+			fieldVal, err := b.transformValueFor(belem.Value, spec, fieldName, others)
+			if err != nil {
+				return nil, err
+			}
+
+			val.Fields[fieldName.Name] = fieldVal
+		}
+	}
+
+	return &val, nil
+}
+
+func (b *ParseScope) transformIdentComposite(tl *ast.Ident, src *ast.CompositeLit, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (Identity, error) {
+	identObj := b.Info.ObjectOf(tl)
+	identObjType, ok := identObj.Type().(*types.Named)
+	if !ok {
+		return nil, errors.New("ast.Ident for IdentComposite should have types.Named as type")
+	}
+
+	switch base := identObjType.Underlying().(type) {
+	case *types.Map:
+		return b.transformMapTypeComposite(base, src, spec, tl, others)
+	case *types.Slice:
+		return b.transformSliceTypeComposite(base, src, spec, tl, others)
+	case *types.Struct:
+		return b.transformStructTypeComposite(base, src, spec, tl, others)
+	}
+
+	return nil, errors.New("types.Ident types.Object.Underlying() for ast.CompositeLit unable to be handled: %#v", identObjType.Underlying())
+}
+
+func (b *ParseScope) transformSelectorComposite(tl *ast.SelectorExpr, src *ast.CompositeLit, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (Identity, error) {
+	selObj := b.Info.ObjectOf(tl.Sel)
+	selType, ok := selObj.Type().(*types.Named)
+	if !ok {
+		return nil, errors.New("ast.SelectorExpr for SelectorComposite should have types.Named as type")
+	}
+
+	switch base := selType.Underlying().(type) {
+	case *types.Map:
+		return b.transformMapTypeComposite(base, src, spec, tl.Sel, others)
+	case *types.Slice:
+		return b.transformSliceTypeComposite(base, src, spec, tl.Sel, others)
+	case *types.Struct:
+		return b.transformStructTypeComposite(base, src, spec, tl.Sel, others)
+	}
+
+	return nil, errors.New("types.SelectorExpr types.Object.Underlying() for ast.CompositeLit unable to be handled: %#v", selType.Underlying())
 }
 
 func (b *ParseScope) transformFuncLitValue(src *ast.FuncLit, spec *ast.ValueSpec, key *ast.Ident, others map[string]*Package) (*Function, error) {
@@ -1593,6 +1911,8 @@ func (b *ParseScope) transformTypeFor(e interface{}, others map[string]*Package)
 	switch core := e.(type) {
 	case types.Object:
 		return b.transformObject(core, others)
+	case *ast.KeyValueExpr:
+		return b.transformKeyValueExpr(core, others)
 	case *ast.Ident:
 		return b.transformIdent(core, others)
 	case *types.Interface:
@@ -1603,6 +1923,8 @@ func (b *ParseScope) transformTypeFor(e interface{}, others map[string]*Package)
 		return b.transformStructType(core, others)
 	case *types.Struct:
 		return b.transformStruct(core, others)
+	case *ast.BasicLit:
+		return b.transformBasicLitOnly(core, others)
 	case *types.Basic:
 		return b.transformBasic(core, others)
 	case *ast.StarExpr:
@@ -1635,14 +1957,31 @@ func (b *ParseScope) transformTypeFor(e interface{}, others map[string]*Package)
 		return b.transformFuncType(core, others)
 	}
 
-	return nil, errors.Wrap(ErrNotFound, "unable to find type: %#v", e)
+	return nil, errors.Wrap(ErrNotFound, "unable to handle type: %#v", e)
+}
+
+func (b *ParseScope) transformBasicLitOnly(e *ast.BasicLit, others map[string]*Package) (Identity, error) {
+	var bm BaseValue
+	bm.Value = e.Value
+	bm.Location = b.getLocation(e.Pos(), e.End())
+	return bm, nil
 }
 
 func (b *ParseScope) transformIdent(e *ast.Ident, others map[string]*Package) (Identity, error) {
 	if obj := b.Info.ObjectOf(e); obj != nil {
+		if obj.Pkg() != nil {
+			if ref, err := b.locateRefFromPackage(obj.Name(), obj.Pkg().Path(), others); err == nil {
+				return ref, nil
+			}
+		}
+
 		return b.transformTypeFor(obj, others)
 	}
 	return nil, errors.New("expected to have types.Object for %#v", e)
+}
+
+func (b *ParseScope) transformKeyValueExpr(e *ast.KeyValueExpr, others map[string]*Package) (Identity, error) {
+	return nil, errors.New("failed to properly handle conversion of %#v", e)
 }
 
 func (b *ParseScope) transformBasic(e *types.Basic, others map[string]*Package) (Base, error) {
@@ -2531,6 +2870,7 @@ func (b *ParseScope) locateRefFromPackage(target string, pkg string, others map[
 	}
 
 	ref := strings.Join([]string{pkg, target}, ".")
+
 	if target, ok := targetPackage.Interfaces[ref]; ok {
 		return target, nil
 	}

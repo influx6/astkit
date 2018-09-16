@@ -36,3 +36,7 @@ type Pos int
 type Wx interface {
 	Ball() string
 }
+
+func Recless(v string) string {
+	return v
+}
