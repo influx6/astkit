@@ -37,6 +37,12 @@ type Identity interface {
 	ID() string
 }
 
+// SetIdentity defines an interface which exposes a method to set
+// the id of it's implementer.
+type SetIdentity interface {
+	SetID(string)
+}
+
 // SourcePoint defines a interface which returns a Location object
 // representing area (i.e declared location, line, column, etc)
 // of implementing type.
@@ -246,19 +252,30 @@ type PackageFile struct {
 type Package struct {
 	Meta *loader.PackageInfo `json:"-"`
 
-	Name       string
-	Docs       []Doc
-	Blanks     []Variable
-	BadDeclrs  []BadExpr
-	Depends    []*Package
-	Variables  map[string]*Variable
-	Constants  map[string]*Variable
-	Types      map[string]*Type
-	Structs    map[string]*Struct
-	Interfaces map[string]*Interface
-	Functions  map[string]*Function
-	Methods    map[string]*Function
-	Files      map[string]*PackageFile
+	Name          string
+	Docs          []Doc
+	Blanks        []*Variable
+	BadDeclrs     []*BadExpr
+	Depends       []*Package
+	NoNameStructs []*Struct
+	Variables     map[string]*Variable
+	Constants     map[string]*Variable
+	Types         map[string]*Type
+	Structs       map[string]*Struct
+	Interfaces    map[string]*Interface
+	Functions     map[string]*Function
+	Methods       map[string]*Function
+	Files         map[string]*PackageFile
+
+	// set of resolvers which are layed out in
+	// order of calling. Block resolvers must be resolved
+	// last as they could use variables and variables resolvers
+	// must be resolved as they could refer to a struct
+	// field type.
+	baseResolvers  []Resolvable
+	namedResolvers []Resolvable
+	varResolvers   []Resolvable
+	blockResolvers []Resolvable
 }
 
 // GetConstant attempts to return Constant reference declared in Package.
@@ -339,49 +356,41 @@ func (p *Package) Add(obj interface{}) error {
 	switch elem := obj.(type) {
 	case Doc:
 		p.Docs = append(p.Docs, elem)
+		return nil
 	case *Package:
 		p.Depends = append(p.Depends, elem)
-	case BadExpr:
-		p.BadDeclrs = append(p.BadDeclrs, elem)
-	case Type:
-		p.Types[elem.Addr()] = &elem
-	case Interface:
-		p.Interfaces[elem.Addr()] = &elem
-	case Struct:
-		p.Structs[elem.Addr()] = &elem
-	case Function:
-		if elem.IsMethod {
-			p.Methods[elem.Addr()] = &elem
-		} else {
-			p.Functions[elem.Addr()] = &elem
-		}
-	case Variable:
-		if elem.Blank {
-			p.Blanks = append(p.Blanks, elem)
-			return nil
-		}
-
-		if elem.Constant {
-			p.Constants[elem.Addr()] = &elem
-			return nil
-		}
-
-		p.Variables[elem.Addr()] = &elem
+		return nil
 	case *Type:
 		p.Types[elem.Addr()] = elem
+		p.namedResolvers = append(p.namedResolvers, elem)
+		return nil
 	case *Interface:
 		p.Interfaces[elem.Addr()] = elem
+		p.baseResolvers = append(p.baseResolvers, elem)
+		return nil
 	case *Struct:
+		if elem.Name == "" {
+			p.NoNameStructs = append(p.NoNameStructs, elem)
+			return nil
+		}
 		p.Structs[elem.Addr()] = elem
+		p.baseResolvers = append(p.baseResolvers, elem)
+		return nil
 	case *Function:
+		p.blockResolvers = append(p.blockResolvers, elem)
+
 		if elem.IsMethod {
 			p.Methods[elem.Addr()] = elem
-		} else {
-			p.Functions[elem.Addr()] = elem
+			return nil
 		}
+
+		p.Functions[elem.Addr()] = elem
+		return nil
 	case *Variable:
+		p.varResolvers = append(p.varResolvers, elem)
+
 		if elem.Blank {
-			p.Blanks = append(p.Blanks, *elem)
+			p.Blanks = append(p.Blanks, elem)
 			return nil
 		}
 
@@ -391,8 +400,10 @@ func (p *Package) Add(obj interface{}) error {
 		}
 
 		p.Variables[elem.Addr()] = elem
+		return nil
 	}
-	return nil
+
+	return errors.New("unable to add type %T", obj)
 }
 
 // Resolve takes the list of indexed packages to internal structures
@@ -405,33 +416,23 @@ func (p *Package) Resolve(indexed map[string]*Package) error {
 			return err
 		}
 	}
-	for _, blank := range p.Blanks {
-		if err := blank.Resolve(indexed); err != nil {
-			return err
-		}
-	}
-	for _, vars := range p.Variables {
-		if err := vars.Resolve(indexed); err != nil {
-			return err
-		}
-	}
-	for _, tp := range p.Types {
-		if err := tp.Resolve(indexed); err != nil {
-			return err
-		}
-	}
-	for _, str := range p.Structs {
+	for _, str := range p.baseResolvers {
 		if err := str.Resolve(indexed); err != nil {
 			return err
 		}
 	}
-	for _, itr := range p.Interfaces {
-		if err := itr.Resolve(indexed); err != nil {
+	for _, str := range p.namedResolvers {
+		if err := str.Resolve(indexed); err != nil {
 			return err
 		}
 	}
-	for _, fn := range p.Functions {
-		if err := fn.Resolve(indexed); err != nil {
+	for _, str := range p.varResolvers {
+		if err := str.Resolve(indexed); err != nil {
+			return err
+		}
+	}
+	for _, str := range p.blockResolvers {
+		if err := str.Resolve(indexed); err != nil {
 			return err
 		}
 	}
@@ -517,6 +518,25 @@ func (p AssignExpr) ID() string {
 
 // Resolve implements Resolvable interface.
 func (p *AssignExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// IndexExpr represents giving Call expression.
+type IndexExpr struct {
+	Commentaries
+	Location
+
+	Elem  Identity
+	Index string
+}
+
+// ID implements Identity.
+func (p IndexExpr) ID() string {
+	return "IndexExpr"
+}
+
+// Resolve implements Resolvable interface.
+func (p *IndexExpr) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
@@ -1080,7 +1100,7 @@ func (p *AddressOf) SetID(n string) {
 
 // ID implements the Identity interface.
 func (p AddressOf) ID() string {
-	return "*" + p.Elem.ID()
+	return "AddressOf"
 }
 
 // Resolve takes the list of indexed packages to internal structures
@@ -1358,7 +1378,7 @@ type Type struct {
 
 	// Methods contains all function defined as methods attached to
 	// type instance.
-	Methods map[string]Function
+	Methods map[string]*Function
 
 	// resolver provides a means of the indexer to provide a custom resolving
 	// function which will run internal logic to set giving values
@@ -1412,7 +1432,7 @@ type Interface struct {
 
 	// Methods contains all method definitions/rules provided
 	// as contract for interface implementors.
-	Methods map[string]Function
+	Methods map[string]*Function
 
 	// resolver provides a means of the indexer to provide a custom resolving
 	// function which will run internal logic to set giving values
@@ -1475,7 +1495,7 @@ type Struct struct {
 
 	// Methods contains all function defined as methods attached to
 	// struct instance.
-	Methods map[string]Function
+	Methods map[string]*Function
 
 	// Meta provides associated package  and commentary information related to
 	// giving type.
