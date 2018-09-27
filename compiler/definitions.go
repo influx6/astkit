@@ -267,7 +267,7 @@ type Package struct {
 	Methods       map[string]*Function
 	Files         map[string]*PackageFile
 
-	// set of resolvers which are layed out in
+	// set of resolvers which are layered out in
 	// order of calling. Block resolvers must be resolved
 	// last as they could use variables and variables resolvers
 	// must be resolved as they could refer to a struct
@@ -276,6 +276,7 @@ type Package struct {
 	namedResolvers []Resolvable
 	varResolvers   []Resolvable
 	blockResolvers []Resolvable
+	resolved       bool
 }
 
 // GetConstant attempts to return Constant reference declared in Package.
@@ -416,6 +417,15 @@ func (p *Package) Resolve(indexed map[string]*Package) error {
 			return err
 		}
 	}
+
+	// if we were previously resolved, then skip.
+	if p.resolved {
+		return nil
+	}
+
+	// set resolution to true.
+	p.resolved = true
+
 	for _, str := range p.baseResolvers {
 		if err := str.Resolve(indexed); err != nil {
 			return err
@@ -537,6 +547,25 @@ func (p IndexExpr) ID() string {
 
 // Resolve implements Resolvable interface.
 func (p *IndexExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// TypeAssert represents giving Call expression.
+type TypeAssert struct {
+	Commentaries
+	Location
+
+	X    Identity
+	Type Identity
+}
+
+// ID implements Identity.
+func (p TypeAssert) ID() string {
+	return "TypeAssert"
+}
+
+// Resolve implements Resolvable interface.
+func (p *TypeAssert) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
@@ -758,6 +787,7 @@ type DeclaredValue struct {
 	// function which will run internal logic to set giving values
 	// appropriately during resolution of types.
 	resolver ResolverFn
+	resolved bool
 }
 
 // ID implements Identity.
@@ -767,6 +797,13 @@ func (p DeclaredValue) ID() string {
 
 // Resolve implements Resolvable interface.
 func (p *DeclaredValue) Resolve(indexed map[string]*Package) error {
+	// if we were previously resolved, then skip.
+	if p.resolved {
+		return nil
+	}
+
+	// set resolution to true.
+	p.resolved = true
 	return p.resolver(indexed)
 }
 
@@ -796,6 +833,7 @@ type DeclaredStructValue struct {
 	// function which will run internal logic to set giving values
 	// appropriately during resolution of types.
 	resolver ResolverFn
+	resolved bool
 }
 
 // ID implements Identity.
@@ -805,6 +843,13 @@ func (p DeclaredStructValue) ID() string {
 
 // Resolve implements Resolvable interface.
 func (p *DeclaredStructValue) Resolve(indexed map[string]*Package) error {
+	// if we were previously resolved, then skip.
+	if p.resolved {
+		return nil
+	}
+
+	// set resolution to true.
+	p.resolved = true
 	return p.resolver(indexed)
 }
 
@@ -827,6 +872,7 @@ type DeclaredListValue struct {
 	// function which will run internal logic to set giving values
 	// appropriately during resolution of types.
 	resolver ResolverFn
+	resolved bool
 }
 
 // ID implements Identity.
@@ -836,6 +882,13 @@ func (p DeclaredListValue) ID() string {
 
 // Resolve implements Resolvable interface.
 func (p *DeclaredListValue) Resolve(indexed map[string]*Package) error {
+	// if we were previously resolved, then skip.
+	if p.resolved {
+		return nil
+	}
+
+	// set resolution to true.
+	p.resolved = true
 	return p.resolver(indexed)
 }
 
@@ -855,6 +908,7 @@ type DeclaredMapValue struct {
 	// function which will run internal logic to set giving values
 	// appropriately during resolution of types.
 	resolver ResolverFn
+	resolved bool
 }
 
 // ID implements Identity.
@@ -864,6 +918,13 @@ func (p DeclaredMapValue) ID() string {
 
 // Resolve implements Resolvable interface.
 func (p *DeclaredMapValue) Resolve(indexed map[string]*Package) error {
+	// if we were previously resolved, then skip.
+	if p.resolved {
+		return nil
+	}
+
+	// set resolution to true.
+	p.resolved = true
 	return p.resolver(indexed)
 }
 
@@ -880,6 +941,7 @@ type BaseValue struct {
 	// function which will run internal logic to set giving values
 	// appropriately during resolution of types.
 	resolver ResolverFn
+	resolved bool
 }
 
 // ID implements Identity.
@@ -889,6 +951,13 @@ func (p BaseValue) ID() string {
 
 // Resolve implements Resolvable interface.
 func (p *BaseValue) Resolve(indexed map[string]*Package) error {
+	// if we were previously resolved, then skip.
+	if p.resolved {
+		return nil
+	}
+
+	// set resolution to true.
+	p.resolved = true
 	return p.resolver(indexed)
 }
 
@@ -914,6 +983,7 @@ type Map struct {
 	// function which will run internal logic to set giving values
 	// appropriately during resolution of types.
 	resolver ResolverFn
+	resolved bool
 }
 
 // ID implements Identity interface.
@@ -926,6 +996,13 @@ func (p Map) ID() string {
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Map) Resolve(indexed map[string]*Package) error {
+	// if we were previously resolved, then skip.
+	if p.resolved {
+		return nil
+	}
+
+	// set resolution to true.
+	p.resolved = true
 	if p.resolver != nil {
 		if err := p.resolver(indexed); err != nil {
 			return err
@@ -963,6 +1040,7 @@ type List struct {
 	// function which will run internal logic to set giving values
 	// appropriately during resolution of types.
 	resolver ResolverFn
+	resolved bool
 }
 
 // ID implements Identity interface.
@@ -975,6 +1053,13 @@ func (p List) ID() string {
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *List) Resolve(indexed map[string]*Package) error {
+	// if we were previously resolved, then skip.
+	if p.resolved {
+		return nil
+	}
+
+	// set resolution to true.
+	p.resolved = true
 	if p.resolver != nil {
 		if err := p.resolver(indexed); err != nil {
 			return err
@@ -999,6 +1084,7 @@ type Channel struct {
 	// function which will run internal logic to set giving values
 	// appropriately during resolution of types.
 	resolver ResolverFn
+	resolved bool
 }
 
 // ID implements Identity interface.
@@ -1011,6 +1097,13 @@ func (p Channel) ID() string {
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Channel) Resolve(indexed map[string]*Package) error {
+	// if we were previously resolved, then skip.
+	if p.resolved {
+		return nil
+	}
+
+	// set resolution to true.
+	p.resolved = true
 	if p.resolver != nil {
 		if err := p.resolver(indexed); err != nil {
 			return err
@@ -1217,6 +1310,7 @@ type Variable struct {
 	// function which will run internal logic to set giving values
 	// appropriately during resolution of types.
 	resolver ResolverFn
+	resolved bool
 }
 
 // SetID sets n to Name field value.
@@ -1234,6 +1328,13 @@ func (p Variable) ID() string {
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Variable) Resolve(indexed map[string]*Package) error {
+	// if we were previously resolved, then skip.
+	if p.resolved {
+		return nil
+	}
+
+	// set resolution to true.
+	p.resolved = true
 	if p.resolver != nil {
 		if err := p.resolver(indexed); err != nil {
 			return err
@@ -1274,6 +1375,7 @@ type Field struct {
 	// function which will run internal logic to set giving values
 	// appropriately during resolution of types.
 	resolver ResolverFn
+	resolved bool
 }
 
 // SetID sets n to Name field value.
@@ -1291,6 +1393,13 @@ func (p Field) ID() string {
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Field) Resolve(indexed map[string]*Package) error {
+	// if we were previously resolved, then skip.
+	if p.resolved {
+		return nil
+	}
+
+	// set resolution to true.
+	p.resolved = true
 	if p.resolver != nil {
 		if err := p.resolver(indexed); err != nil {
 			return err
@@ -1328,6 +1437,7 @@ type Parameter struct {
 	// function which will run internal logic to set giving values
 	// appropriately during resolution of types.
 	resolver ResolverFn
+	resolved bool
 }
 
 // SetID sets n to Name field value.
@@ -1345,6 +1455,13 @@ func (p Parameter) ID() string {
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Parameter) Resolve(indexed map[string]*Package) error {
+	// if we were previously resolved, then skip.
+	if p.resolved {
+		return nil
+	}
+
+	// set resolution to true.
+	p.resolved = true
 	if p.resolver != nil {
 		if err := p.resolver(indexed); err != nil {
 			return err
@@ -1384,6 +1501,7 @@ type Type struct {
 	// function which will run internal logic to set giving values
 	// appropriately during resolution of types.
 	resolver ResolverFn
+	resolved bool
 }
 
 // SetID sets n to Name field value.
@@ -1401,6 +1519,13 @@ func (p Type) ID() string {
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Type) Resolve(indexed map[string]*Package) error {
+	// if we were previously resolved, then skip.
+	if p.resolved {
+		return nil
+	}
+
+	// set resolution to true.
+	p.resolved = true
 	if p.resolver != nil {
 		if err := p.resolver(indexed); err != nil {
 			return err
@@ -1438,6 +1563,7 @@ type Interface struct {
 	// function which will run internal logic to set giving values
 	// appropriately during resolution of types.
 	resolver ResolverFn
+	resolved bool
 }
 
 // SetID sets n to Name field value.
@@ -1455,6 +1581,13 @@ func (p Interface) ID() string {
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Interface) Resolve(indexed map[string]*Package) error {
+	// if we were previously resolved, then skip.
+	if p.resolved {
+		return nil
+	}
+
+	// set resolution to true.
+	p.resolved = true
 	if p.resolver != nil {
 		if err := p.resolver(indexed); err != nil {
 			return err
@@ -1505,6 +1638,7 @@ type Struct struct {
 	// function which will run internal logic to set giving values
 	// appropriately during resolution of types.
 	resolver ResolverFn
+	resolved bool
 }
 
 // SetID sets n to Name field value.
@@ -1522,6 +1656,13 @@ func (p Struct) ID() string {
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Struct) Resolve(indexed map[string]*Package) error {
+	// if we were previously resolved, then skip.
+	if p.resolved {
+		return nil
+	}
+
+	// set resolution to true.
+	p.resolved = true
 	if p.resolver != nil {
 		if err := p.resolver(indexed); err != nil {
 			return err
@@ -1584,6 +1725,7 @@ type Function struct {
 	// function which will run internal logic to set giving values
 	// appropriately during resolution of types.
 	resolver ResolverFn
+	resolved bool
 }
 
 // SetID sets n to Name field value.
@@ -1601,6 +1743,13 @@ func (p Function) ID() string {
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Function) Resolve(indexed map[string]*Package) error {
+	// if we were previously resolved, then skip.
+	if p.resolved {
+		return nil
+	}
+
+	// set resolution to true.
+	p.resolved = true
 	if p.resolver != nil {
 		if err := p.resolver(indexed); err != nil {
 			return err

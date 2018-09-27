@@ -42,7 +42,6 @@ type Indexer struct {
 	waiter  sync.WaitGroup
 	arw     sync.RWMutex
 	indexed map[string]*Package
-	//indexedResolvers []ResolverFn
 }
 
 // Index takes provided loader.Program returning a Package containing
@@ -256,17 +255,26 @@ func (b *ParseScope) Parse(ctx context.Context, in chan interface{}) error {
 }
 
 var (
-	pathRegEx  = regexp.MustCompile(`^([\da-z\.-]+\.[a-z\.]{2,6})([\/\w \.-]*)*\/?$`)
-	pkgRegExp  = regexp.MustCompile(`\/([\w\d_-]+)\.(.+)$`)
-	pkgRegExp2 = regexp.MustCompile(`^([\w\d]+)\.([\w\d-_]+)$`)
+	pathRegEx      = regexp.MustCompile(`^([\da-z\.-]+\.[a-z\.]{2,6})([\/\w \.-]*)*\/?$`)
+	pkgRegExp      = regexp.MustCompile(`\/([\w\d_-]+)\.(.+)$`)
+	pkgRegExp2     = regexp.MustCompile(`^([\w\d]+)\.([\w\d-_]+)$`)
+	typeNameRegExp = regexp.MustCompile(`^([\w\d_-]+)$`)
 )
 
 func (b *ParseScope) identityType(e typeRepresentation, others map[string]*Package) (typeIdentity, error) {
 	var id typeIdentity
 
 	typeString := e.String()
-	if !pathRegEx.MatchString(typeString) && !pkgRegExp2.MatchString(typeString) {
+	if !pathRegEx.MatchString(typeString) && !pkgRegExp2.MatchString(typeString) && !typeNameRegExp.MatchString(typeString) {
 		return id, errors.New("invalid data")
+	}
+
+	if typeNameRegExp.MatchString(typeString) {
+		id.Type = typeString
+		id.Text = typeString
+		id.Alias = b.From.Name
+		id.Package = b.From.Name
+		return id, nil
 	}
 
 	if pkgRegExp2.MatchString(typeString) {
@@ -461,8 +469,9 @@ func (b *ParseScope) handleVariable(ctx context.Context, mindex int, named *ast.
 	}
 
 	if len(val.Values) == 0 && val.Type == nil {
-		fmt.Printf("Var4[%s.%s] Type: %#v\n", b.From.Name, named.Name, val.Type)
 		declr.Type = AnyType
+		in <- &declr
+		return nil
 	}
 
 	declrAddr := &declr
@@ -1496,6 +1505,8 @@ func (b *ParseScope) transformTypeFor(e interface{}, others map[string]*Package)
 		return b.transformKeyValuePair(core, others)
 	case *types.Var:
 		return b.transformVarObject(core, others)
+	case *ast.TypeAssertExpr:
+		return b.transformTypeAssertExpr(core, others)
 	case types.Object:
 		return b.transformObject(core, others)
 	case *ast.Ident:
@@ -1557,8 +1568,34 @@ func (b *ParseScope) transformTypeFor(e interface{}, others map[string]*Package)
 	return nil, errors.Wrap(ErrNotFound, "unable to handle type: %#v", e)
 }
 
+func (b *ParseScope) transformTypeAssertExpr(src *ast.TypeAssertExpr, others map[string]*Package) (Identity, error) {
+	var ts TypeAssert
+
+	// read location information(line, column, source text etc) for giving type.
+	ts.Location = b.getLocation(src.Pos(), src.End())
+
+	xt, err := b.transformTypeFor(src.X, others)
+	if err != nil {
+		return nil, err
+	}
+
+	ts.X = xt
+
+	tt, err := b.transformTypeFor(src.Type, others)
+	if err != nil {
+		return nil, err
+	}
+
+	ts.Type = tt
+
+	return ts, nil
+}
+
 func (b *ParseScope) transformKeyValuePair(src *ast.KeyValueExpr, others map[string]*Package) (Identity, error) {
 	var pair KeyValuePair
+
+	// read location information(line, column, source text etc) for giving type.
+	pair.Location = b.getLocation(src.Pos(), src.End())
 
 	nkey, err := b.transformTypeFor(src.Key, others)
 	if err != nil {
@@ -1593,7 +1630,6 @@ func (b *ParseScope) transformUnaryExpr(src *ast.UnaryExpr, others map[string]*P
 		return &op, nil
 	}
 
-	fmt.Printf("Base: %#v -> %T \n", src, base)
 	var val AddressOf
 	val.Elem = base
 	val.Name = base.ID()
@@ -1682,9 +1718,33 @@ func (b *ParseScope) transformBasicLitOnly(e *ast.BasicLit, others map[string]*P
 	return bm, nil
 }
 
-func (b *ParseScope) transformIdent(e *ast.Ident, others map[string]*Package) (Identity, error) {
-	if e.Name == "error" {
+func (b *ParseScope) getBaseType(name string) (Identity, error) {
+	switch name {
+	case "error":
 		return ErrorType, nil
+	case "interface{}", "interface":
+		return AnyType, nil
+	case "Type1", "Integer1", "Type":
+		return BaseFor(name), nil
+	case "IntegerType", "FloatType", "ComplexType":
+		return BaseFor(name), nil
+	case "bool":
+		return BaseFor(name), nil
+	case "uintptr", "uint", "int", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64":
+		return BaseFor(name), nil
+	case "rune", "string":
+		return BaseFor(name), nil
+	case "float32", "float64":
+		return BaseFor(name), nil
+	case "complex128", "complex64":
+		return BaseFor(name), nil
+	}
+	return nil, errors.New("unknown base type %q", name)
+}
+
+func (b *ParseScope) transformIdent(e *ast.Ident, others map[string]*Package) (Identity, error) {
+	if bd, err := b.getBaseType(e.Name); err == nil {
+		return bd, err
 	}
 
 	if e.Obj == nil {
@@ -1701,11 +1761,7 @@ func (b *ParseScope) transformIdent(e *ast.Ident, others map[string]*Package) (I
 	}
 
 	ref := strings.Join([]string{b.From.Name, e.Name}, ".")
-	if target, err := b.findWithinPackage(ref, b.From); err == nil {
-		return target, nil
-	}
-
-	return nil, errors.New("unable to handle ident type: %#v\n", e)
+	return b.findWithinPackage(ref, b.From)
 }
 
 func (b *ParseScope) transformVarObject(src *types.Var, others map[string]*Package) (Identity, error) {
@@ -1715,24 +1771,11 @@ func (b *ParseScope) transformVarObject(src *types.Var, others map[string]*Packa
 		}
 	}
 
-	return b.transformObject(src, others)
-}
-
-func (b *ParseScope) transformObjectValueFor(src *ast.Object, target *ast.Ident, others map[string]*Package) (Identity, error) {
-	if pointingObj := b.Info.ObjectOf(target); pointingObj != nil {
-		fmt.Printf("PointingObj[%q]: %T\n", target.Name, pointingObj)
-		return b.transformTypeFor(pointingObj, others)
+	if ref, err := b.locateRefFromPackage(src.Name(), b.From.Name, others); err == nil {
+		return ref, nil
 	}
 
-	//if identity, err := b.identityType(e, others); err == nil {
-	//	return b.locateReferencedIdentity(identity, others)
-	//}
-
-	//switch item := src.Decl.(type) {
-	//case *ast.ValueSpec:
-	//	return b.transformAssignedValueSpec(item, target, others)
-	//}
-	return nil, errors.New("unable to transform assigend value type: %#v", src.Decl)
+	return nil, errors.New("unable to locate var object: %#v", src)
 }
 
 func (b *ParseScope) transformAssignedValueSpec(spec *ast.ValueSpec, src *ast.Ident, others map[string]*Package) (Identity, error) {
@@ -2265,6 +2308,10 @@ func (b *ParseScope) locateStructWithObject(e *types.Struct, named *types.Named,
 }
 
 func (b *ParseScope) locateReferencedIdentity(location typeIdentity, others map[string]*Package) (Identity, error) {
+	if bd, err := b.getBaseType(location.Text); err == nil {
+		return bd, err
+	}
+
 	targetPackage, ok := others[location.Package]
 	if !ok {
 		return nil, errors.Wrap(ErrNotFound, "unable to find package for %q", location.Package)
@@ -2847,16 +2894,12 @@ func (b *ParseScope) transformSelectorWithComposite(cp *ast.CompositeLit, e *ast
 		}
 
 		return b.locateRefFromObject([]string{e.Sel.Name}, tStruct, others)
-	default:
-		return nil, errors.New("ast.Selector.X when composite should have type as *ast.Ident or *ast.SelectorExpr: %#v\n", cp.Type)
 	}
 
-	return nil, errors.New("failed to handle ast.SelectorExpr with ast.CompositeLit: %#v", e)
+	return nil, errors.New("failed to handle ast.SelectorExpr with ast.CompositeLit: %#v : %#v", e, cp.Type)
 }
 
 func (b *ParseScope) transformSelectorExprWithIdent(me *ast.Ident, e *ast.SelectorExpr, others map[string]*Package) (Identity, error) {
-	fmt.Printf("SelectorProcessing[%q][%q] -> %#v\n", b.From.Name, me.Name, e.Sel)
-
 	//Are we dealing with an import prefix?
 	if meta, err := b.transformSelectExprToMeta(e, others); err == nil {
 		return b.locateRefFromPackage(e.Sel.Name, meta.Path, others)
@@ -2916,8 +2959,6 @@ func (b *ParseScope) transformSelectorExprWithSelector(next *ast.SelectorExpr, p
 		return nil, err
 	}
 
-	fmt.Printf("Walking path tree: %q -> %T :: %#v\n", parts, next, next.X)
-
 	// We need to find specific import that uses giving name as import alias.
 	if imp, ok := b.Package.Imports[parts[0]]; ok {
 		return b.locateRefFromPathSeries(parts[1:], imp.Path, others)
@@ -2925,7 +2966,6 @@ func (b *ParseScope) transformSelectorExprWithSelector(next *ast.SelectorExpr, p
 
 	// Are we dealing with an internal package object (variable, struct, interface, function) ?
 	ref := strings.Join([]string{b.From.Name, parts[0]}, ".")
-	fmt.Printf("Walking path tree: %q:%q -> %T :: %#v\n", parts, ref, next, next.X)
 	if targetRef, err := b.findWithinPackage(ref, b.From); err == nil {
 		return b.locateRefFromObject(parts[1:], targetRef, others)
 	}
@@ -2984,7 +3024,6 @@ func (b *ParseScope) locateRefFromPathSeries(parts []string, pkg string, others 
 }
 
 func (b *ParseScope) locateRefFromObject(parts []string, target Identity, others map[string]*Package) (Identity, error) {
-	fmt.Printf("\nFinding: %+q -> %T :: %#v\n\n", parts, target, target)
 	if target == nil {
 		return nil, errors.New("target can not be nil")
 	}
@@ -3029,7 +3068,6 @@ func (b *ParseScope) locateRefFromObject(parts []string, target Identity, others
 		}
 		return nil, errors.New("unable to locate giving method from named type: %+q", parts)
 	case *Variable:
-		fmt.Printf("Variable[%q]: %T -> %#v\n", parts, item, item)
 		return b.locateRefFromObject(parts[1:], item.Type, others)
 	}
 
@@ -3046,7 +3084,6 @@ func (b *ParseScope) locateRefFromPackage(target string, pkg string, others map[
 }
 
 func (b *ParseScope) findWithinPackage(ref string, targetPackage *Package) (Identity, error) {
-	fmt.Printf("Seeking %q in package in %q\n", ref, targetPackage.Name)
 	if target, ok := targetPackage.Variables[ref]; ok {
 		return target, nil
 	}
