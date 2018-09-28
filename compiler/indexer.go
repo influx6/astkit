@@ -807,19 +807,28 @@ func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, in chan interface{}) e
 	}
 
 	target := fn.Recv.List[0]
+
+	var instanceName *ast.Ident
 	if len(target.Names) != 0 {
-		declr.Path = strings.Join([]string{obj.Pkg().Path(), fn.Recv.List[0].Names[0].Name, fn.Name.Name}, ".")
+		instanceName = target.Names[0]
 	} else {
-		switch head := target.Type.(type) {
-		case *ast.StarExpr:
-			headIdent, ok := head.X.(*ast.Ident)
-			if !ok {
-				return errors.New("ast.StarExpr does not use ast.Ident as X: %#v", head.X)
-			}
-			declr.Path = strings.Join([]string{obj.Pkg().Path(), headIdent.Name, fn.Name.Name}, ".")
-		case *ast.Ident:
-			declr.Path = strings.Join([]string{obj.Pkg().Path(), head.Name, fn.Name.Name}, ".")
+		instanceName = &ast.Ident{Name: ""}
+	}
+
+	declr.ReceiverName = instanceName.Name
+
+	switch head := target.Type.(type) {
+	case *ast.StarExpr:
+		headr, ok := head.X.(*ast.Ident)
+		if !ok {
+			return errors.New("ast.StarExpr does not use ast.Ident as X: %#v", head.X)
 		}
+
+		declr.Path = strings.Join([]string{obj.Pkg().Path(), headr.Name, fn.Name.Name}, ".")
+		declr.ReceiverAddr = strings.Join([]string{obj.Pkg().Path(), headr.Name, fn.Name.Name, instanceName.Name}, ".")
+	case *ast.Ident:
+		declr.Path = strings.Join([]string{obj.Pkg().Path(), head.Name, fn.Name.Name}, ".")
+		declr.ReceiverAddr = strings.Join([]string{obj.Pkg().Path(), head.Name, fn.Name.Name, instanceName.Name}, ".")
 	}
 
 	fnAddr := &declr
@@ -878,6 +887,8 @@ func (b *ParseScope) handleFunctionLit(fn *ast.FuncLit) (Function, error) {
 		declrAddr.Body = body
 		return nil
 	}
+
+	b.From.deferedResolvers = append(b.From.deferedResolvers, declr.resolver)
 
 	return declr, nil
 }
@@ -1496,7 +1507,6 @@ func (b *ParseScope) handleBlockStmt(dn *Function, fn *ast.BlockStmt, others map
 	gp.Location = b.getLocation(fn.Pos(), fn.End())
 
 	for _, block := range fn.List {
-		fmt.Printf("FuncBlock[%q:  %q]: %#v\n", b.Package.File, dn.Name, block)
 		stmt, err := b.transformStmt(dn, fn, block, others)
 		if err != nil {
 			return nil, err
@@ -1507,8 +1517,9 @@ func (b *ParseScope) handleBlockStmt(dn *Function, fn *ast.BlockStmt, others map
 	return &gp, nil
 }
 
-func (b *ParseScope) transformStmt(dn *Function, fn *ast.BlockStmt, focus interface{}, others map[string]*Package) (Expr, error) {
-	switch target := focus.(type) {
+func (b *ParseScope) transformStmt(dn *Function, fn *ast.BlockStmt, block interface{}, others map[string]*Package) (Expr, error) {
+	fmt.Printf("FuncBlock[%q:  %q]: %#v\n", b.Package.File, dn.Name, block)
+	switch target := block.(type) {
 	case *ast.SwitchStmt:
 		return b.transformSwitchStatement(dn, fn, target, others)
 	case *ast.AssignStmt:
@@ -1549,7 +1560,7 @@ func (b *ParseScope) transformStmt(dn *Function, fn *ast.BlockStmt, focus interf
 		return b.transformExprStmt(dn, fn, target, others)
 	}
 
-	return nil, errors.New("unable to handle giving Stmt %#v", focus)
+	return nil, errors.New("unable to handle giving Stmt %#v", block)
 }
 
 func (b *ParseScope) transformEmptyStmt(dn *Function, fn *ast.BlockStmt, sw *ast.EmptyStmt, others map[string]*Package) (Expr, error) {

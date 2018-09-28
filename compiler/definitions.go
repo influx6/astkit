@@ -2048,6 +2048,14 @@ type Function struct {
 	// one.
 	Body *GroupStmt
 
+	// ReceiverName represents the instance name giving to the
+	// function receiver ie. (instanceName Type) func.
+	ReceiverName string
+
+	// ReceiverAddr represents the combination of the Pathway.Path and
+	// ReceiverName of giving function.
+	ReceiverAddr string
+
 	// Name represents the name of giving interface.
 	Name string
 
