@@ -37,6 +37,13 @@ type Identity interface {
 	ID() string
 }
 
+// Expr defines a type which composes Identity interface and exposes a method to return
+// string version of an expression.
+type Expr interface {
+	Identity
+	Expr() string
+}
+
 // SetIdentity defines an interface which exposes a method to set
 // the id of it's implementer.
 type SetIdentity interface {
@@ -202,7 +209,19 @@ type GroupStmt struct {
 	BeginSymbol string
 	EndSymbol   string
 	Type        ExprType
-	Children    []Identity
+	Children    []Expr
+}
+
+// ID returns the assigned string id of giving type.
+// It implements the Identity interface.
+func (g GroupStmt) ID() string {
+	return "GroupStmt"
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (g GroupStmt) Expr() string {
+	return ""
 }
 
 // ExprType returns type value of GroupStmt.
@@ -460,8 +479,35 @@ func (p ReturnsExpr) ID() string {
 	return "Returns"
 }
 
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p ReturnsExpr) Expr() string {
+	return ""
+}
+
 // Resolve implements Resolvable interface.
 func (p *ReturnsExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// EmptyExpr represents giving function passed into a goroutine using the "go" keyword.
+type EmptyExpr struct {
+	Location
+}
+
+// ID implements Identity.
+func (p EmptyExpr) ID() string {
+	return "go"
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p EmptyExpr) Expr() string {
+	return ""
+}
+
+// Resolve implements Resolvable interface.
+func (p *EmptyExpr) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
@@ -476,6 +522,12 @@ type GoExpr struct {
 // ID implements Identity.
 func (p GoExpr) ID() string {
 	return "go"
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p GoExpr) Expr() string {
+	return ""
 }
 
 // Resolve implements Resolvable interface.
@@ -502,6 +554,12 @@ type ChanDirExpr struct {
 	Receiver Identity
 }
 
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p ChanDirExpr) Expr() string {
+	return ""
+}
+
 // ID implements Identity.
 func (p ChanDirExpr) ID() string {
 	return "Assign"
@@ -526,6 +584,12 @@ func (p AssignExpr) ID() string {
 	return "Assign"
 }
 
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p AssignExpr) Expr() string {
+	return ""
+}
+
 // Resolve implements Resolvable interface.
 func (p *AssignExpr) Resolve(indexed map[string]*Package) error {
 	return nil
@@ -543,6 +607,12 @@ type IndexExpr struct {
 // ID implements Identity.
 func (p IndexExpr) ID() string {
 	return "IndexExpr"
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p IndexExpr) Expr() string {
+	return ""
 }
 
 // Resolve implements Resolvable interface.
@@ -564,8 +634,221 @@ func (p TypeAssert) ID() string {
 	return "TypeAssert"
 }
 
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p TypeAssert) Expr() string {
+	return ""
+}
+
 // Resolve implements Resolvable interface.
 func (p *TypeAssert) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// StmtExpr represents giving char expression like Bracket, + , -
+// Stmts used in code.
+type StmtExpr struct {
+	Commentaries
+	Location
+}
+
+// ID implements Identity.
+func (p StmtExpr) ID() string {
+	return "if"
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p StmtExpr) Expr() string {
+	return ""
+}
+
+// Resolve implements Resolvable interface.
+func (p *StmtExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// IncDecExpr represents giving char expression like Bracket, + , -
+// IncDecs used in code.
+type IncDecExpr struct {
+	Commentaries
+	Location
+}
+
+// ID implements Identity.
+func (p IncDecExpr) ID() string {
+	return "if"
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p IncDecExpr) Expr() string {
+	return ""
+}
+
+// Resolve implements Resolvable interface.
+func (p *IncDecExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// LabeledExpr represents giving char expression like Bracket, + , -
+// Labeleds used in code.
+type LabeledExpr struct {
+	Commentaries
+	Location
+}
+
+// ID implements Identity.
+func (p LabeledExpr) ID() string {
+	return "if"
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p LabeledExpr) Expr() string {
+	return ""
+}
+
+// Resolve implements Resolvable interface.
+func (p *LabeledExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// SelectExpr represents giving char expression like Bracket, + , -
+// Selects used in code.
+type SelectExpr struct {
+	Commentaries
+	Location
+}
+
+// ID implements Identity.
+func (p SelectExpr) ID() string {
+	return "if"
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p SelectExpr) Expr() string {
+	return ""
+}
+
+// Resolve implements Resolvable interface.
+func (p *SelectExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// SendExpr represents giving char expression like Bracket, + , -
+// Sends used in code.
+type SendExpr struct {
+	Commentaries
+	Location
+}
+
+// ID implements Identity.
+func (p SendExpr) ID() string {
+	return "if"
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p SendExpr) Expr() string {
+	return ""
+}
+
+// Resolve implements Resolvable interface.
+func (p *SendExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// TypeSwitchExpr represents giving char expression like Bracket, + , -
+// TypeSwitchs used in code.
+type TypeSwitchExpr struct {
+	Commentaries
+	Location
+}
+
+// ID implements Identity.
+func (p TypeSwitchExpr) ID() string {
+	return "if"
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p TypeSwitchExpr) Expr() string {
+	return ""
+}
+
+// Resolve implements Resolvable interface.
+func (p *TypeSwitchExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// DeclrExpr represents giving char expression like Bracket, + , -
+// Declrs used in code.
+type DeclrExpr struct {
+	Commentaries
+	Location
+}
+
+// ID implements Identity.
+func (p DeclrExpr) ID() string {
+	return "if"
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p DeclrExpr) Expr() string {
+	return ""
+}
+
+// Resolve implements Resolvable interface.
+func (p *DeclrExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// BranchExpr represents giving char expression like Bracket, + , -
+// Branchs used in code.
+type BranchExpr struct {
+	Commentaries
+	Location
+}
+
+// ID implements Identity.
+func (p BranchExpr) ID() string {
+	return "if"
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p BranchExpr) Expr() string {
+	return ""
+}
+
+// Resolve implements Resolvable interface.
+func (p *BranchExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// DeferExpr represents giving char expression like Bracket, + , -
+// Defers used in code.
+type DeferExpr struct {
+	Commentaries
+	Location
+}
+
+// ID implements Identity.
+func (p DeferExpr) ID() string {
+	return "if"
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p DeferExpr) Expr() string {
+	return ""
+}
+
+// Resolve implements Resolvable interface.
+func (p *DeferExpr) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
@@ -581,6 +864,12 @@ type CallExpr struct {
 // ID implements Identity.
 func (p CallExpr) ID() string {
 	return p.Func.ID()
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p CallExpr) Expr() string {
+	return ""
 }
 
 // Resolve implements Resolvable interface.
@@ -599,6 +888,12 @@ func (p RangeExpr) ID() string {
 	return "Range"
 }
 
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p RangeExpr) Expr() string {
+	return ""
+}
+
 // Resolve implements Resolvable interface.
 func (p *RangeExpr) Resolve(indexed map[string]*Package) error {
 	return nil
@@ -613,6 +908,12 @@ type ForExpr struct {
 // ID implements Identity.
 func (p ForExpr) ID() string {
 	return "for"
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p ForExpr) Expr() string {
+	return ""
 }
 
 // Resolve implements Resolvable interface.
@@ -653,6 +954,12 @@ func (p BinaryExpr) ID() string {
 	return p.Op
 }
 
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p BinaryExpr) Expr() string {
+	return ""
+}
+
 // Resolve implements Resolvable interface.
 func (p *BinaryExpr) Resolve(indexed map[string]*Package) error {
 	return nil
@@ -672,6 +979,12 @@ type SymbolExpr struct {
 // ID implements Identity.
 func (p SymbolExpr) ID() string {
 	return string(p.Symbol)
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p SymbolExpr) Expr() string {
+	return ""
 }
 
 // Resolve implements Resolvable interface.
@@ -715,6 +1028,29 @@ func (p *PropertyGetExpr) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
+// SwitchExpr represents giving char expression like Bracket, + , -
+// Switchs used in code.
+type SwitchExpr struct {
+	Commentaries
+	Location
+}
+
+// ID implements Identity.
+func (p SwitchExpr) ID() string {
+	return "if"
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p SwitchExpr) Expr() string {
+	return ""
+}
+
+// Resolve implements Resolvable interface.
+func (p *SwitchExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
 // IfExpr represents giving char expression like Bracket, + , -
 // Ifs used in code.
 type IfExpr struct {
@@ -725,6 +1061,12 @@ type IfExpr struct {
 // ID implements Identity.
 func (p IfExpr) ID() string {
 	return "if"
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p IfExpr) Expr() string {
+	return ""
 }
 
 // Resolve implements Resolvable interface.
@@ -743,6 +1085,12 @@ type BadExpr struct {
 
 // ID implements Identity.
 func (p BadExpr) ID() string {
+	return ""
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p BadExpr) Expr() string {
 	return ""
 }
 
