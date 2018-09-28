@@ -795,16 +795,6 @@ func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, in chan interface{}) e
 		}
 	}
 
-	fnAddr := &declr
-	if fn.Body != nil {
-		body, err := b.handleBlockStmt(fnAddr, fn.Body)
-		if err != nil {
-			return err
-		}
-
-		declr.Body = body
-	}
-
 	if fn.Recv == nil {
 		declr.Path = strings.Join([]string{obj.Pkg().Path(), fn.Name.Name}, ".")
 		in <- &declr
@@ -832,6 +822,7 @@ func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, in chan interface{}) e
 		}
 	}
 
+	fnAddr := &declr
 	declr.resolver = func(others map[string]*Package) error {
 		ownerType, err := b.getTypeFromFieldExpr(target.Type, target, others)
 		if err != nil {
@@ -849,6 +840,15 @@ func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, in chan interface{}) e
 
 		fnAddr.IsMethod = true
 		fnAddr.Owner = ownerType
+
+		if fn.Body != nil {
+			body, err := b.handleBlockStmt(fnAddr, fn.Body, others)
+			if err != nil {
+				return err
+			}
+			fnAddr.Body = body
+		}
+
 		return nil
 	}
 
@@ -869,12 +869,15 @@ func (b *ParseScope) handleFunctionLit(fn *ast.FuncLit) (Function, error) {
 		return declr, nil
 	}
 
-	body, err := b.handleBlockStmt(&declr, fn.Body)
-	if err != nil {
-		return declr, err
+	declrAddr := &declr
+	declr.resolver = func(others map[string]*Package) error {
+		body, err := b.handleBlockStmt(&declr, fn.Body, others)
+		if err != nil {
+			return err
+		}
+		declrAddr.Body = body
+		return nil
 	}
-
-	declr.Body = body
 
 	return declr, nil
 }
@@ -1482,7 +1485,7 @@ func (b *ParseScope) getTypeFromFieldExpr(e ast.Expr, f *ast.Field, others map[s
 // BlockStmt related transformations
 //**********************************************************************************
 
-func (b *ParseScope) handleBlockStmt(dn *Function, fn *ast.BlockStmt) (*GroupStmt, error) {
+func (b *ParseScope) handleBlockStmt(dn *Function, fn *ast.BlockStmt, others map[string]*Package) (*GroupStmt, error) {
 	var gp GroupStmt
 	gp.EndSymbol = "}"
 	gp.BeginSymbol = "{"
@@ -1494,7 +1497,7 @@ func (b *ParseScope) handleBlockStmt(dn *Function, fn *ast.BlockStmt) (*GroupStm
 
 	for _, block := range fn.List {
 		fmt.Printf("FuncBlock[%q:  %q]: %#v\n", b.Package.File, dn.Name, block)
-		stmt, err := b.transformStmt(dn, fn, block)
+		stmt, err := b.transformStmt(dn, fn, block, others)
 		if err != nil {
 			return nil, err
 		}
@@ -1504,170 +1507,170 @@ func (b *ParseScope) handleBlockStmt(dn *Function, fn *ast.BlockStmt) (*GroupStm
 	return &gp, nil
 }
 
-func (b *ParseScope) transformStmt(dn *Function, fn *ast.BlockStmt, focus interface{}) (Expr, error) {
+func (b *ParseScope) transformStmt(dn *Function, fn *ast.BlockStmt, focus interface{}, others map[string]*Package) (Expr, error) {
 	switch target := focus.(type) {
 	case *ast.SwitchStmt:
-		return b.transformSwitchStatement(dn, fn, target)
+		return b.transformSwitchStatement(dn, fn, target, others)
 	case *ast.AssignStmt:
-		return b.transformAssignStmt(dn, fn, target)
+		return b.transformAssignStmt(dn, fn, target, others)
 	case *ast.BlockStmt:
-		return b.transformBlockStmt(dn, fn, target)
+		return b.transformBlockStmt(dn, fn, target, others)
 	case *ast.EmptyStmt:
-		return b.transformEmptyStmt(dn, fn, target)
+		return b.transformEmptyStmt(dn, fn, target, others)
 	case *ast.BranchStmt:
-		return b.transformBranchStmt(dn, fn, target)
+		return b.transformBranchStmt(dn, fn, target, others)
 	case *ast.DeferStmt:
-		return b.transformDeferStmt(dn, fn, target)
+		return b.transformDeferStmt(dn, fn, target, others)
 	case *ast.DeclStmt:
-		return b.transformDeclrStmt(dn, fn, target)
+		return b.transformDeclrStmt(dn, fn, target, others)
 	case *ast.BadStmt:
-		return b.transformBadStmt(dn, fn, target)
+		return b.transformBadStmt(dn, fn, target, others)
 	case *ast.GoStmt:
-		return b.transformGoStmt(dn, fn, target)
+		return b.transformGoStmt(dn, fn, target, others)
 	case *ast.RangeStmt:
-		return b.transformRangeStmt(dn, fn, target)
+		return b.transformRangeStmt(dn, fn, target, others)
 	case *ast.TypeSwitchStmt:
-		return b.transformTypeSwitchStmt(dn, fn, target)
+		return b.transformTypeSwitchStmt(dn, fn, target, others)
 	case *ast.SendStmt:
-		return b.transformSendStmt(dn, fn, target)
+		return b.transformSendStmt(dn, fn, target, others)
 	case *ast.SelectStmt:
-		return b.transformSelectStmt(dn, fn, target)
+		return b.transformSelectStmt(dn, fn, target, others)
 	case *ast.ReturnStmt:
-		return b.transformReturnStmt(dn, fn, target)
+		return b.transformReturnStmt(dn, fn, target, others)
 	case *ast.LabeledStmt:
-		return b.transformLabeledStmt(dn, fn, target)
+		return b.transformLabeledStmt(dn, fn, target, others)
 	case *ast.IncDecStmt:
-		return b.transformIncDecStmt(dn, fn, target)
+		return b.transformIncDecStmt(dn, fn, target, others)
 	case *ast.IfStmt:
-		return b.transformIfStmt(dn, fn, target)
+		return b.transformIfStmt(dn, fn, target, others)
 	case *ast.ForStmt:
-		return b.transformForStmt(dn, fn, target)
+		return b.transformForStmt(dn, fn, target, others)
 	case *ast.ExprStmt:
-		return b.transformExprStmt(dn, fn, target)
+		return b.transformExprStmt(dn, fn, target, others)
 	}
 
 	return nil, errors.New("unable to handle giving Stmt %#v", focus)
 }
 
-func (b *ParseScope) transformEmptyStmt(dn *Function, fn *ast.BlockStmt, sw *ast.EmptyStmt) (Expr, error) {
+func (b *ParseScope) transformEmptyStmt(dn *Function, fn *ast.BlockStmt, sw *ast.EmptyStmt, others map[string]*Package) (Expr, error) {
 	var stmt EmptyExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformExprStmt(dn *Function, fn *ast.BlockStmt, sw *ast.ExprStmt) (Expr, error) {
+func (b *ParseScope) transformExprStmt(dn *Function, fn *ast.BlockStmt, sw *ast.ExprStmt, others map[string]*Package) (Expr, error) {
 	var stmt StmtExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformForStmt(dn *Function, fn *ast.BlockStmt, sw *ast.ForStmt) (Expr, error) {
+func (b *ParseScope) transformForStmt(dn *Function, fn *ast.BlockStmt, sw *ast.ForStmt, others map[string]*Package) (Expr, error) {
 	var stmt ForExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformIfStmt(dn *Function, fn *ast.BlockStmt, sw *ast.IfStmt) (Expr, error) {
+func (b *ParseScope) transformIfStmt(dn *Function, fn *ast.BlockStmt, sw *ast.IfStmt, others map[string]*Package) (Expr, error) {
 	var stmt IfExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformIncDecStmt(dn *Function, fn *ast.BlockStmt, sw *ast.IncDecStmt) (Expr, error) {
+func (b *ParseScope) transformIncDecStmt(dn *Function, fn *ast.BlockStmt, sw *ast.IncDecStmt, others map[string]*Package) (Expr, error) {
 	var stmt IncDecExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformLabeledStmt(dn *Function, fn *ast.BlockStmt, sw *ast.LabeledStmt) (Expr, error) {
+func (b *ParseScope) transformLabeledStmt(dn *Function, fn *ast.BlockStmt, sw *ast.LabeledStmt, others map[string]*Package) (Expr, error) {
 	var stmt LabeledExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformReturnStmt(dn *Function, fn *ast.BlockStmt, sw *ast.ReturnStmt) (Expr, error) {
+func (b *ParseScope) transformReturnStmt(dn *Function, fn *ast.BlockStmt, sw *ast.ReturnStmt, others map[string]*Package) (Expr, error) {
 	var stmt ReturnsExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformSelectStmt(dn *Function, fn *ast.BlockStmt, sw *ast.SelectStmt) (Expr, error) {
+func (b *ParseScope) transformSelectStmt(dn *Function, fn *ast.BlockStmt, sw *ast.SelectStmt, others map[string]*Package) (Expr, error) {
 	var stmt SelectExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformSendStmt(dn *Function, fn *ast.BlockStmt, sw *ast.SendStmt) (Expr, error) {
+func (b *ParseScope) transformSendStmt(dn *Function, fn *ast.BlockStmt, sw *ast.SendStmt, others map[string]*Package) (Expr, error) {
 	var stmt SendExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformTypeSwitchStmt(dn *Function, fn *ast.BlockStmt, sw *ast.TypeSwitchStmt) (Expr, error) {
+func (b *ParseScope) transformTypeSwitchStmt(dn *Function, fn *ast.BlockStmt, sw *ast.TypeSwitchStmt, others map[string]*Package) (Expr, error) {
 	var stmt TypeSwitchExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformRangeStmt(dn *Function, fn *ast.BlockStmt, sw *ast.RangeStmt) (Expr, error) {
+func (b *ParseScope) transformRangeStmt(dn *Function, fn *ast.BlockStmt, sw *ast.RangeStmt, others map[string]*Package) (Expr, error) {
 	var stmt RangeExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformDeclrStmt(dn *Function, fn *ast.BlockStmt, sw *ast.DeclStmt) (Expr, error) {
+func (b *ParseScope) transformDeclrStmt(dn *Function, fn *ast.BlockStmt, sw *ast.DeclStmt, others map[string]*Package) (Expr, error) {
 	var stmt DeclrExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformGoStmt(dn *Function, fn *ast.BlockStmt, sw *ast.GoStmt) (Expr, error) {
+func (b *ParseScope) transformGoStmt(dn *Function, fn *ast.BlockStmt, sw *ast.GoStmt, others map[string]*Package) (Expr, error) {
 	var stmt GoExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformBadStmt(dn *Function, fn *ast.BlockStmt, sw *ast.BadStmt) (Expr, error) {
+func (b *ParseScope) transformBadStmt(dn *Function, fn *ast.BlockStmt, sw *ast.BadStmt, others map[string]*Package) (Expr, error) {
 	var stmt BadExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformDeferStmt(dn *Function, fn *ast.BlockStmt, sw *ast.DeferStmt) (Expr, error) {
+func (b *ParseScope) transformDeferStmt(dn *Function, fn *ast.BlockStmt, sw *ast.DeferStmt, others map[string]*Package) (Expr, error) {
 	var stmt DeferExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformBranchStmt(dn *Function, fn *ast.BlockStmt, sw *ast.BranchStmt) (Expr, error) {
+func (b *ParseScope) transformBranchStmt(dn *Function, fn *ast.BlockStmt, sw *ast.BranchStmt, others map[string]*Package) (Expr, error) {
 	var stmt BranchExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformAssignStmt(dn *Function, fn *ast.BlockStmt, sw *ast.AssignStmt) (Expr, error) {
+func (b *ParseScope) transformAssignStmt(dn *Function, fn *ast.BlockStmt, sw *ast.AssignStmt, others map[string]*Package) (Expr, error) {
 	var stmt AssignExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformBlockStmt(dn *Function, pa *ast.BlockStmt, sw *ast.BlockStmt) (Expr, error) {
+func (b *ParseScope) transformBlockStmt(dn *Function, pa *ast.BlockStmt, sw *ast.BlockStmt, others map[string]*Package) (Expr, error) {
 	var gp GroupStmt
 	gp.EndSymbol = "}"
 	gp.BeginSymbol = "{"
@@ -1678,7 +1681,7 @@ func (b *ParseScope) transformBlockStmt(dn *Function, pa *ast.BlockStmt, sw *ast
 	gp.Location = b.getLocation(sw.Pos(), sw.End())
 
 	for _, block := range sw.List {
-		stmt, err := b.transformStmt(dn, sw, block)
+		stmt, err := b.transformStmt(dn, sw, block, others)
 		if err != nil {
 			return nil, err
 		}
@@ -1688,7 +1691,7 @@ func (b *ParseScope) transformBlockStmt(dn *Function, pa *ast.BlockStmt, sw *ast
 	return &gp, nil
 }
 
-func (b *ParseScope) transformSwitchStatement(dn *Function, fn *ast.BlockStmt, sw *ast.SwitchStmt) (Expr, error) {
+func (b *ParseScope) transformSwitchStatement(dn *Function, fn *ast.BlockStmt, sw *ast.SwitchStmt, others map[string]*Package) (Expr, error) {
 	var stmt SwitchExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 

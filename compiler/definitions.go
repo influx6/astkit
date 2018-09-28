@@ -291,11 +291,12 @@ type Package struct {
 	// last as they could use variables and variables resolvers
 	// must be resolved as they could refer to a struct
 	// field type.
-	baseResolvers  []Resolvable
-	namedResolvers []Resolvable
-	varResolvers   []Resolvable
-	blockResolvers []Resolvable
-	resolved       bool
+	baseResolvers    []Resolvable
+	namedResolvers   []Resolvable
+	varResolvers     []Resolvable
+	blockResolvers   []Resolvable
+	deferedResolvers []ResolverFn
+	resolved         bool
 }
 
 // GetConstant attempts to return Constant reference declared in Package.
@@ -462,6 +463,11 @@ func (p *Package) Resolve(indexed map[string]*Package) error {
 	}
 	for _, str := range p.blockResolvers {
 		if err := str.Resolve(indexed); err != nil {
+			return err
+		}
+	}
+	for _, str := range p.deferedResolvers {
+		if err := str(indexed); err != nil {
 			return err
 		}
 	}
@@ -2113,8 +2119,10 @@ func (p *Function) Resolve(indexed map[string]*Package) error {
 			return err
 		}
 	}
-	if p.Body != nil {
-		return p.Body.Resolve(indexed)
+
+	if p.Body == nil {
+		return nil
 	}
-	return nil
+
+	return p.Body.Resolve(indexed)
 }
