@@ -101,6 +101,7 @@ func (indexer *Indexer) indexPackage(ctx context.Context, targetPackage string, 
 		MethodByReceiver: map[string]*Function{},
 		Interfaces:       map[string]*Interface{},
 		Files:            map[string]*PackageFile{},
+		functionScope:    map[string]functionScope{},
 	}
 
 	indexer.addIndexed(pkg)
