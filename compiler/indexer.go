@@ -90,16 +90,17 @@ func (indexer *Indexer) Index(ctx context.Context) (*Package, map[string]*Packag
 // parsed structures, types and declarations of all packages.
 func (indexer *Indexer) indexPackage(ctx context.Context, targetPackage string, p *loader.PackageInfo) (*Package, error) {
 	pkg := &Package{
-		Meta:       p,
-		Name:       targetPackage,
-		Types:      map[string]*Type{},
-		Structs:    map[string]*Struct{},
-		Variables:  map[string]*Variable{},
-		Constants:  map[string]*Variable{},
-		Functions:  map[string]*Function{},
-		Methods:    map[string]*Function{},
-		Interfaces: map[string]*Interface{},
-		Files:      map[string]*PackageFile{},
+		Meta:             p,
+		Name:             targetPackage,
+		Types:            map[string]*Type{},
+		Structs:          map[string]*Struct{},
+		Variables:        map[string]*Variable{},
+		Constants:        map[string]*Variable{},
+		Functions:        map[string]*Function{},
+		Methods:          map[string]*Function{},
+		MethodByReceiver: map[string]*Function{},
+		Interfaces:       map[string]*Interface{},
+		Files:            map[string]*PackageFile{},
 	}
 
 	indexer.addIndexed(pkg)
@@ -761,6 +762,7 @@ func (b *ParseScope) handleNamedType(ctx context.Context, ty *ast.TypeSpec, spec
 func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, in chan interface{}) error {
 	var declr Function
 	declr.Name = fn.Name.Name
+	declr.ScopeName = fn.Name.Name
 
 	if fn.Doc != nil {
 		b.comments[fn.Doc] = struct{}{}
@@ -797,11 +799,24 @@ func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, in chan interface{}) e
 
 	if fn.Recv == nil {
 		declr.Path = strings.Join([]string{obj.Pkg().Path(), fn.Name.Name}, ".")
+
+		b.From.functionScope[declr.Path] = functionScope{
+			Fn:    &declr,
+			Scope: map[string]Identity{},
+		}
+
 		in <- &declr
 		return nil
 	}
 
 	if len(fn.Recv.List) == 0 {
+		declr.Path = strings.Join([]string{obj.Pkg().Path(), fn.Name.Name}, ".")
+
+		b.From.functionScope[declr.Path] = functionScope{
+			Fn:    &declr,
+			Scope: map[string]Identity{},
+		}
+
 		in <- &declr
 		return nil
 	}
@@ -824,6 +839,7 @@ func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, in chan interface{}) e
 			return errors.New("ast.StarExpr does not use ast.Ident as X: %#v", head.X)
 		}
 
+		declr.IsPointerMethod = true
 		declr.Path = strings.Join([]string{obj.Pkg().Path(), headr.Name, fn.Name.Name}, ".")
 		declr.ReceiverAddr = strings.Join([]string{obj.Pkg().Path(), headr.Name, fn.Name.Name, instanceName.Name}, ".")
 	case *ast.Ident:
@@ -832,6 +848,11 @@ func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, in chan interface{}) e
 	}
 
 	fnAddr := &declr
+	b.From.functionScope[declr.Path] = functionScope{
+		Fn:    fnAddr,
+		Scope: map[string]Identity{},
+	}
+
 	declr.resolver = func(others map[string]*Package) error {
 		ownerType, err := b.getTypeFromFieldExpr(target.Type, target, others)
 		if err != nil {
@@ -895,9 +916,16 @@ func (b *ParseScope) handleFunctionLit(fn *ast.FuncLit) (Function, error) {
 
 func (b *ParseScope) handleFunctionType(name string, fn *ast.FuncType) (Function, error) {
 	var declr Function
+	declr.ScopeName = String(10)
+	declr.Path = strings.Join([]string{b.From.Name, "func", declr.ScopeName}, ".")
 
 	// read location information(line, column, source text etc) for giving type.
 	declr.Location = b.getLocation(fn.Pos(), fn.End())
+
+	b.From.functionScope[declr.Path] = functionScope{
+		Fn:    &declr,
+		Scope: map[string]Identity{},
+	}
 
 	var err error
 	if fn.Params != nil {
@@ -1678,6 +1706,28 @@ func (b *ParseScope) transformAssignStmt(dn *Function, fn *ast.BlockStmt, sw *as
 	var stmt AssignExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
+	var leftHand []Identity
+	//for _, left := range sw.Lhs {
+	//	elem, err := b.transformTypeFor(left, others)
+	//	if err != nil {
+	//		return nil, err
+	//	}
+	//	leftHand = append(leftHand, elem)
+	//}
+
+	stmt.Left = leftHand
+
+	var rightHand []Identity
+	//for _, right := range sw.Rhs {
+	//	elem, err := b.transformTypeFor(right, others)
+	//	if err != nil {
+	//		return nil, err
+	//	}
+	//	leftHand = append(leftHand, elem)
+	//}
+
+	stmt.Right = rightHand
+
 	return &stmt, nil
 }
 
@@ -1707,6 +1757,10 @@ func (b *ParseScope) transformSwitchStatement(dn *Function, fn *ast.BlockStmt, s
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
 	return &stmt, nil
+}
+
+func (b *ParseScope) transformTypeForFunction(e interface{}, fn *Function, others map[string]*Package) (Identity, error) {
+
 }
 
 //**********************************************************************************
@@ -1975,7 +2029,11 @@ func (b *ParseScope) transformIdent(e *ast.Ident, others map[string]*Package) (I
 	}
 
 	ref := strings.Join([]string{b.From.Name, e.Name}, ".")
-	return b.findWithinPackage(ref, b.From)
+	if b, err := b.findWithinPackage(ref, b.From); err == nil {
+		return b, nil
+	}
+
+	return BaseFor(e.Name), nil
 }
 
 func (b *ParseScope) transformVarObject(src *types.Var, others map[string]*Package) (Identity, error) {

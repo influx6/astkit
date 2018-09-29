@@ -3,6 +3,7 @@ package compiler
 import (
 	"fmt"
 	"go/ast"
+	"math/rand"
 	"regexp"
 	"strings"
 
@@ -15,7 +16,19 @@ import (
 
 var (
 	varSignatureRegExp = regexp.MustCompile(`var\s([a-zA-Z0-9_]+)\s([a-zA-Z0-9_\.\/\$]+)`)
+	alphanums          = []rune("bcdfghjklmnpqrstvwxz0123456789")
 )
+
+// String generates a random alphanumeric string, without vowels, which is n
+// characters long.  This will panic if n is less than zero.
+func String(length int) string {
+	b := make([]rune, length)
+	for i := range b {
+		nr := rand.Intn(len(alphanums))
+		b[i] = alphanums[nr]
+	}
+	return string(b)
+}
 
 type varSignature struct {
 	Name    string

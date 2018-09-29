@@ -271,20 +271,21 @@ type PackageFile struct {
 type Package struct {
 	Meta *loader.PackageInfo `json:"-"`
 
-	Name          string
-	Docs          []Doc
-	Blanks        []*Variable
-	BadDeclrs     []*BadExpr
-	Depends       []*Package
-	NoNameStructs []*Struct
-	Variables     map[string]*Variable
-	Constants     map[string]*Variable
-	Types         map[string]*Type
-	Structs       map[string]*Struct
-	Interfaces    map[string]*Interface
-	Functions     map[string]*Function
-	Methods       map[string]*Function
-	Files         map[string]*PackageFile
+	Name             string
+	Docs             []Doc
+	Blanks           []*Variable
+	BadDeclrs        []*BadExpr
+	Depends          []*Package
+	NoNameStructs    []*Struct
+	Variables        map[string]*Variable
+	Constants        map[string]*Variable
+	Types            map[string]*Type
+	Structs          map[string]*Struct
+	Interfaces       map[string]*Interface
+	Functions        map[string]*Function
+	Methods          map[string]*Function
+	MethodByReceiver map[string]*Function
+	Files            map[string]*PackageFile
 
 	// set of resolvers which are layered out in
 	// order of calling. Block resolvers must be resolved
@@ -296,7 +297,13 @@ type Package struct {
 	varResolvers     []Resolvable
 	blockResolvers   []Resolvable
 	deferedResolvers []ResolverFn
+	functionScope    map[string]functionScope
 	resolved         bool
+}
+
+type functionScope struct {
+	Fn    *Function
+	Scope map[string]Identity
 }
 
 // GetConstant attempts to return Constant reference declared in Package.
@@ -402,6 +409,12 @@ func (p *Package) Add(obj interface{}) error {
 
 		if elem.IsMethod {
 			p.Methods[elem.Addr()] = elem
+
+			// If it has a receiver instance name then add to methods with receivers.
+			if elem.ReceiverName != "" {
+				p.MethodByReceiver[elem.ReceiverAddr] = elem
+			}
+
 			return nil
 		}
 
@@ -581,8 +594,8 @@ type AssignExpr struct {
 	Commentaries
 	Location
 
-	Value    Identity
-	Receiver Identity
+	Left  []Identity
+	Right []Identity
 }
 
 // ID implements Identity.
@@ -2048,6 +2061,11 @@ type Function struct {
 	// one.
 	Body *GroupStmt
 
+	// ScopeName sets the giving random name or function name attached
+	// to giving function during parsing of it's body. It's used
+	// to manage overall scoping of values, variables called within.
+	ScopeName string
+
 	// ReceiverName represents the instance name giving to the
 	// function receiver ie. (instanceName Type) func.
 	ReceiverName string
@@ -2065,6 +2083,9 @@ type Function struct {
 	// IsMethod indicates if giving function is a method of a struct or a method
 	// contract for an interface.
 	IsMethod bool
+
+	// IsPointerMethod returns true/false if giving receiver is a pointer type.
+	IsPointerMethod bool
 
 	// IsVariadic indicates if the last argument is variadic.
 	IsVariadic bool
