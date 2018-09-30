@@ -297,13 +297,7 @@ type Package struct {
 	varResolvers     []Resolvable
 	blockResolvers   []Resolvable
 	deferedResolvers []ResolverFn
-	functionScope    map[string]functionScope
 	resolved         bool
-}
-
-type functionScope struct {
-	Fn    *Function
-	Scope map[string]Identity
 }
 
 // GetConstant attempts to return Constant reference declared in Package.
@@ -491,6 +485,8 @@ func (p *Package) Resolve(indexed map[string]*Package) error {
 type ReturnsExpr struct {
 	Commentaries
 	Location
+
+	Results []Expr
 }
 
 // ID implements Identity.
@@ -512,6 +508,7 @@ func (p *ReturnsExpr) Resolve(indexed map[string]*Package) error {
 // EmptyExpr represents giving function passed into a goroutine using the "go" keyword.
 type EmptyExpr struct {
 	Location
+	Implicit bool
 }
 
 // ID implements Identity.
@@ -535,7 +532,7 @@ type GoExpr struct {
 	Commentaries
 	Location
 
-	Fn *Function
+	Fn *CallExpr
 }
 
 // ID implements Identity.
@@ -669,6 +666,8 @@ func (p *TypeAssert) Resolve(indexed map[string]*Package) error {
 type StmtExpr struct {
 	Commentaries
 	Location
+
+	X Expr
 }
 
 // ID implements Identity.
@@ -692,6 +691,10 @@ func (p *StmtExpr) Resolve(indexed map[string]*Package) error {
 type IncDecExpr struct {
 	Commentaries
 	Location
+
+	Target Expr
+	Inc    bool
+	Dec    bool
 }
 
 // ID implements Identity.
@@ -715,6 +718,9 @@ func (p *IncDecExpr) Resolve(indexed map[string]*Package) error {
 type LabeledExpr struct {
 	Commentaries
 	Location
+
+	Label string
+	Stmt  Expr
 }
 
 // ID implements Identity.
@@ -738,6 +744,7 @@ func (p *LabeledExpr) Resolve(indexed map[string]*Package) error {
 type SelectExpr struct {
 	Commentaries
 	Location
+	Body *GroupStmt
 }
 
 // ID implements Identity.
@@ -761,6 +768,9 @@ func (p *SelectExpr) Resolve(indexed map[string]*Package) error {
 type SendExpr struct {
 	Commentaries
 	Location
+
+	Chan  Expr
+	Value Expr
 }
 
 // ID implements Identity.
@@ -784,6 +794,10 @@ func (p *SendExpr) Resolve(indexed map[string]*Package) error {
 type TypeSwitchExpr struct {
 	Commentaries
 	Location
+
+	Body   *GroupStmt
+	Init   Expr
+	Assign Expr
 }
 
 // ID implements Identity.
@@ -807,6 +821,7 @@ func (p *TypeSwitchExpr) Resolve(indexed map[string]*Package) error {
 type DeclrExpr struct {
 	Commentaries
 	Location
+	Declr Identity
 }
 
 // ID implements Identity.
@@ -830,6 +845,8 @@ func (p *DeclrExpr) Resolve(indexed map[string]*Package) error {
 type BranchExpr struct {
 	Commentaries
 	Location
+
+	Label Identity
 }
 
 // ID implements Identity.
@@ -853,6 +870,7 @@ func (p *BranchExpr) Resolve(indexed map[string]*Package) error {
 type DeferExpr struct {
 	Commentaries
 	Location
+	Fn *CallExpr
 }
 
 // ID implements Identity.
@@ -900,6 +918,11 @@ func (p *CallExpr) Resolve(indexed map[string]*Package) error {
 type RangeExpr struct {
 	Commentaries
 	Location
+
+	X     Expr
+	Key   Expr
+	Value Expr
+	Body  *GroupStmt
 }
 
 // ID implements Identity.
@@ -922,6 +945,11 @@ func (p *RangeExpr) Resolve(indexed map[string]*Package) error {
 type ForExpr struct {
 	Commentaries
 	Location
+
+	Body *GroupStmt
+	Cond Expr
+	Init Expr
+	Post Expr
 }
 
 // ID implements Identity.
@@ -1052,6 +1080,10 @@ func (p *PropertyGetExpr) Resolve(indexed map[string]*Package) error {
 type SwitchExpr struct {
 	Commentaries
 	Location
+
+	Init Expr
+	Body *GroupStmt
+	Tag  Expr
 }
 
 // ID implements Identity.
@@ -1075,6 +1107,11 @@ func (p *SwitchExpr) Resolve(indexed map[string]*Package) error {
 type IfExpr struct {
 	Commentaries
 	Location
+
+	Body *GroupStmt
+	Init Expr
+	Else Expr
+	Cond Expr
 }
 
 // ID implements Identity.
@@ -1129,6 +1166,11 @@ type KeyValuePair struct {
 
 	// Value represents type and value associated with key pair.
 	Value Identity
+}
+
+// Expr returns string representation of giving type.
+func (p KeyValuePair) Expr() string {
+	return ""
 }
 
 // ID implements Identity.
@@ -1358,6 +1400,11 @@ func (p Map) ID() string {
 	return "Map"
 }
 
+// Expr returns string representation of giving type.
+func (p Map) Expr() string {
+	return ""
+}
+
 // Resolve takes the list of indexed packages to internal structures
 // to resolve imported or internal types that they Pathwayerence. This is
 // used to ensure all package structures have direct link to parsed
@@ -1415,6 +1462,11 @@ func (p List) ID() string {
 	return "List"
 }
 
+// Expr returns string representation of giving type.
+func (p List) Expr() string {
+	return ""
+}
+
 // Resolve takes the list of indexed packages to internal structures
 // to resolve imported or internal types that they Pathwayerence. This is
 // used to ensure all package structures have direct link to parsed
@@ -1459,6 +1511,11 @@ func (p Channel) ID() string {
 	return "Channel"
 }
 
+// Expr returns string representation of giving type.
+func (p Channel) Expr() string {
+	return ""
+}
+
 // Resolve takes the list of indexed packages to internal structures
 // to resolve imported or internal types that they Pathwayerence. This is
 // used to ensure all package structures have direct link to parsed
@@ -1491,6 +1548,11 @@ type DePointer struct {
 
 	// Elem contains associated type the star(*) is trying to dereference.
 	Elem Identity
+}
+
+// Expr returns string representation of giving type.
+func (p DePointer) Expr() string {
+	return ""
 }
 
 // SetID sets n to Name field value.
@@ -1527,6 +1589,11 @@ type OpOf struct {
 	Elem Identity
 }
 
+// Expr returns string representation of giving type.
+func (p OpOf) Expr() string {
+	return ""
+}
+
 // ID implements the Identity interface.
 func (p OpOf) ID() string {
 	return p.Op + p.Elem.ID()
@@ -1551,6 +1618,11 @@ type AddressOf struct {
 
 	// Elem contains associated type the pointer represents.
 	Elem Identity
+}
+
+// Expr returns string representation of giving type.
+func (p AddressOf) Expr() string {
+	return ""
 }
 
 // SetID sets n to Name field value.
@@ -1583,6 +1655,11 @@ type Pointer struct {
 
 	// Elem contains associated type the pointer represents.
 	Elem Identity
+}
+
+// Expr returns string representation of giving type.
+func (p Pointer) Expr() string {
+	return ""
 }
 
 // SetID sets n to Name field value.
@@ -1624,6 +1701,11 @@ func BaseFor(baseName string) Base {
 // SetID sets n to Name field value.
 func (p *Base) SetID(n string) {
 	p.Name = n
+}
+
+// Expr returns string representation of giving type.
+func (p Base) Expr() string {
+	return ""
 }
 
 // ID implements the Identity interface.
@@ -1683,6 +1765,11 @@ type Variable struct {
 // SetID sets n to Name field value.
 func (p *Variable) SetID(n string) {
 	p.Name = n
+}
+
+// Expr returns string representation of giving type.
+func (p Variable) Expr() string {
+	return ""
 }
 
 // ID implements Identity interface.
@@ -1748,6 +1835,11 @@ type Field struct {
 // SetID sets n to Name field value.
 func (p *Field) SetID(n string) {
 	p.Name = n
+}
+
+// Expr returns string representation of giving type.
+func (p Field) Expr() string {
+	return ""
 }
 
 // ID implements Identity interface.
@@ -1817,6 +1909,11 @@ func (p Parameter) ID() string {
 	return p.Name
 }
 
+// Expr returns string representation of giving type.
+func (p Parameter) Expr() string {
+	return ""
+}
+
 // Resolve takes the list of indexed packages to internal structures
 // to resolve imported or internal types that they Pathwayerence. This is
 // used to ensure all package structures have direct link to parsed
@@ -1881,6 +1978,11 @@ func (p Type) ID() string {
 	return p.Name
 }
 
+// Expr returns string representation of giving type.
+func (p Type) Expr() string {
+	return ""
+}
+
 // Resolve takes the list of indexed packages to internal structures
 // to resolve imported or internal types that they Pathwayerence. This is
 // used to ensure all package structures have direct link to parsed
@@ -1931,6 +2033,11 @@ type Interface struct {
 	// appropriately during resolution of types.
 	resolver ResolverFn
 	resolved bool
+}
+
+// Expr returns string representation of giving type.
+func (p Interface) Expr() string {
+	return ""
 }
 
 // SetID sets n to Name field value.
@@ -2016,6 +2123,11 @@ func (p *Struct) SetID(n string) {
 // ID implements Identity interface.
 func (p Struct) ID() string {
 	return p.Name
+}
+
+// Expr returns string representation of giving type.
+func (p Struct) Expr() string {
+	return ""
 }
 
 // Resolve takes the list of indexed packages to internal structures
@@ -2114,6 +2226,11 @@ type Function struct {
 // SetID sets n to Name field value.
 func (p *Function) SetID(n string) {
 	p.Name = n
+}
+
+// Expr returns string representation of giving type.
+func (p Function) Expr() string {
+	return ""
 }
 
 // ID implements Identity interface.

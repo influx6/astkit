@@ -101,7 +101,6 @@ func (indexer *Indexer) indexPackage(ctx context.Context, targetPackage string, 
 		MethodByReceiver: map[string]*Function{},
 		Interfaces:       map[string]*Interface{},
 		Files:            map[string]*PackageFile{},
-		functionScope:    map[string]functionScope{},
 	}
 
 	indexer.addIndexed(pkg)
@@ -144,6 +143,7 @@ func (indexer *Indexer) index(ctx context.Context, pkg *Package, p *loader.Packa
 		scope.Indexer = indexer
 		scope.Package = pkgFile
 		scope.Program = indexer.Program
+		scope.scopes = map[string]*functionScope{}
 
 		// if file has an associated package-level documentation,
 		// parse it and add to package documentation.
@@ -215,6 +215,7 @@ type ParseScope struct {
 	Program  *loader.Program
 	Info     *loader.PackageInfo
 	comments map[*ast.CommentGroup]struct{}
+	scopes   map[string]*functionScope
 }
 
 // Parse runs through all non-comment based declarations within the
@@ -801,7 +802,7 @@ func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, in chan interface{}) e
 	if fn.Recv == nil {
 		declr.Path = strings.Join([]string{obj.Pkg().Path(), fn.Name.Name}, ".")
 
-		b.From.functionScope[declr.Path] = functionScope{
+		b.scopes[declr.Path] = &functionScope{
 			Fn:    &declr,
 			Scope: map[string]Identity{},
 		}
@@ -813,7 +814,7 @@ func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, in chan interface{}) e
 	if len(fn.Recv.List) == 0 {
 		declr.Path = strings.Join([]string{obj.Pkg().Path(), fn.Name.Name}, ".")
 
-		b.From.functionScope[declr.Path] = functionScope{
+		b.scopes[declr.Path] = &functionScope{
 			Fn:    &declr,
 			Scope: map[string]Identity{},
 		}
@@ -849,7 +850,7 @@ func (b *ParseScope) handleFunctionSpec(fn *ast.FuncDecl, in chan interface{}) e
 	}
 
 	fnAddr := &declr
-	b.From.functionScope[declr.Path] = functionScope{
+	b.scopes[declr.Path] = &functionScope{
 		Fn:    fnAddr,
 		Scope: map[string]Identity{},
 	}
@@ -923,7 +924,7 @@ func (b *ParseScope) handleFunctionType(name string, fn *ast.FuncType) (Function
 	// read location information(line, column, source text etc) for giving type.
 	declr.Location = b.getLocation(fn.Pos(), fn.End())
 
-	b.From.functionScope[declr.Path] = functionScope{
+	b.scopes[declr.Path] = &functionScope{
 		Fn:    &declr,
 		Scope: map[string]Identity{},
 	}
@@ -1594,6 +1595,7 @@ func (b *ParseScope) transformStmt(dn *Function, fn *ast.BlockStmt, block interf
 
 func (b *ParseScope) transformEmptyStmt(dn *Function, fn *ast.BlockStmt, sw *ast.EmptyStmt, others map[string]*Package) (Expr, error) {
 	var stmt EmptyExpr
+	stmt.Implicit = sw.Implicit
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 	return &stmt, nil
 }
@@ -1602,6 +1604,12 @@ func (b *ParseScope) transformExprStmt(dn *Function, fn *ast.BlockStmt, sw *ast.
 	var stmt StmtExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
+	xd, err := b.transformFunctionExpr(sw.X, fn, dn, others)
+	if err != nil {
+		return nil, err
+	}
+
+	stmt.X = xd
 	return &stmt, nil
 }
 
@@ -1609,12 +1617,79 @@ func (b *ParseScope) transformForStmt(dn *Function, fn *ast.BlockStmt, sw *ast.F
 	var stmt ForExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
+	cond, err := b.transformFunctionExpr(sw.Cond, fn, dn, others)
+	if err != nil {
+		return nil, err
+	}
+
+	stmt.Cond = cond
+
+	postd, err := b.transformStmt(dn, fn, sw.Pos(), others)
+	if err != nil {
+		return nil, err
+	}
+
+	stmt.Post = postd
+
+	initd, err := b.transformStmt(dn, fn, sw.Init, others)
+	if err != nil {
+		return nil, err
+	}
+
+	stmt.Init = initd
+
+	body, err := b.transformStmt(dn, fn, sw.Body, others)
+	if err != nil {
+		return nil, err
+	}
+
+	gbody, ok := body.(*GroupStmt)
+	if !ok {
+		return nil, errors.New("body of RangeStmt must be type *GroupStmt")
+	}
+
+	stmt.Body = gbody
 	return &stmt, nil
 }
 
 func (b *ParseScope) transformIfStmt(dn *Function, fn *ast.BlockStmt, sw *ast.IfStmt, others map[string]*Package) (Expr, error) {
 	var stmt IfExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
+
+	cond, err := b.transformFunctionExpr(sw.Cond, fn, dn, others)
+	if err != nil {
+		return nil, err
+	}
+
+	stmt.Cond = cond
+
+	initd, err := b.transformStmt(dn, fn, sw.Init, others)
+	if err != nil {
+		return nil, err
+	}
+
+	stmt.Init = initd
+
+	body, err := b.transformStmt(dn, fn, sw.Body, others)
+	if err != nil {
+		return nil, err
+	}
+
+	gbody, ok := body.(*GroupStmt)
+	if !ok {
+		return nil, errors.New("body of RangeStmt must be type *GroupStmt")
+	}
+
+	stmt.Body = gbody
+
+	if sw.Else != nil {
+		elsed, err := b.transformStmt(dn, fn, sw.Else, others)
+		if err != nil {
+			return nil, err
+		}
+
+		stmt.Else = elsed
+	}
 
 	return &stmt, nil
 }
@@ -1623,19 +1698,49 @@ func (b *ParseScope) transformIncDecStmt(dn *Function, fn *ast.BlockStmt, sw *as
 	var stmt IncDecExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
+	if sw.Tok.String() == "--" || sw.Tok.String() == "-" {
+		stmt.Dec = true
+	} else {
+		stmt.Inc = true
+	}
+
+	val, err := b.transformFunctionExpr(sw.X, fn, dn, others)
+	if err != nil {
+		return nil, err
+	}
+
+	stmt.Target = val
 	return &stmt, nil
 }
 
 func (b *ParseScope) transformLabeledStmt(dn *Function, fn *ast.BlockStmt, sw *ast.LabeledStmt, others map[string]*Package) (Expr, error) {
 	var stmt LabeledExpr
+	stmt.Label = sw.Label.Name
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
+
+	stm, err := b.transformStmt(dn, fn, sw.Stmt, others)
+	if err != nil {
+		return nil, err
+	}
+
+	stmt.Stmt = stm
 
 	return &stmt, nil
 }
 
 func (b *ParseScope) transformReturnStmt(dn *Function, fn *ast.BlockStmt, sw *ast.ReturnStmt, others map[string]*Package) (Expr, error) {
 	var stmt ReturnsExpr
+	stmt.Results = make([]Expr, 0, len(sw.Results))
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
+
+	for _, elem := range sw.Results {
+		celem, err := b.transformFunctionExpr(elem, fn, dn, others)
+		if err != nil {
+			return nil, err
+		}
+
+		stmt.Results = append(stmt.Results, celem)
+	}
 
 	return &stmt, nil
 }
@@ -1644,12 +1749,38 @@ func (b *ParseScope) transformSelectStmt(dn *Function, fn *ast.BlockStmt, sw *as
 	var stmt SelectExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
+	body, err := b.transformStmt(dn, fn, sw.Body, others)
+	if err != nil {
+		return nil, err
+	}
+
+	gbody, ok := body.(*GroupStmt)
+	if !ok {
+		return nil, errors.New("body of RangeStmt must be type *GroupStmt")
+	}
+
+	stmt.Body = gbody
+
 	return &stmt, nil
 }
 
 func (b *ParseScope) transformSendStmt(dn *Function, fn *ast.BlockStmt, sw *ast.SendStmt, others map[string]*Package) (Expr, error) {
 	var stmt SendExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
+
+	ch, err := b.transformFunctionExpr(sw.Chan, fn, dn, others)
+	if err != nil {
+		return nil, err
+	}
+
+	stmt.Chan = ch
+
+	val, err := b.transformFunctionExpr(sw.Value, fn, dn, others)
+	if err != nil {
+		return nil, err
+	}
+
+	stmt.Value = val
 
 	return &stmt, nil
 }
@@ -1658,12 +1789,71 @@ func (b *ParseScope) transformTypeSwitchStmt(dn *Function, fn *ast.BlockStmt, sw
 	var stmt TypeSwitchExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
+	assigned, err := b.transformStmt(dn, fn, sw.Assign, others)
+	if err != nil {
+		return nil, err
+	}
+
+	stmt.Assign = assigned
+
+	initd, err := b.transformStmt(dn, fn, sw.Init, others)
+	if err != nil {
+		return nil, err
+	}
+
+	stmt.Init = initd
+
+	body, err := b.transformStmt(dn, fn, sw.Body, others)
+	if err != nil {
+		return nil, err
+	}
+
+	gbody, ok := body.(*GroupStmt)
+	if !ok {
+		return nil, errors.New("body of RangeStmt must be type *GroupStmt")
+	}
+
+	stmt.Body = gbody
+
 	return &stmt, nil
 }
 
 func (b *ParseScope) transformRangeStmt(dn *Function, fn *ast.BlockStmt, sw *ast.RangeStmt, others map[string]*Package) (Expr, error) {
 	var stmt RangeExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
+
+	body, err := b.transformStmt(dn, fn, sw.Body, others)
+	if err != nil {
+		return nil, err
+	}
+
+	gbody, ok := body.(*GroupStmt)
+	if !ok {
+		return nil, errors.New("body of RangeStmt must be type *GroupStmt")
+	}
+
+	stmt.Body = gbody
+
+	x, err := b.transformStmt(dn, fn, sw.X, others)
+	if err != nil {
+		return nil, err
+	}
+
+	stmt.X = x
+
+	key, err := b.transformFunctionExpr(sw.Key, fn, dn, others)
+	if err != nil {
+		return nil, err
+	}
+
+	stmt.Key = key
+
+	val, err := b.transformFunctionExpr(sw.Value, fn, dn, others)
+	if err != nil {
+		return nil, err
+	}
+
+	stmt.Value = val
 
 	return &stmt, nil
 }
@@ -1672,6 +1862,12 @@ func (b *ParseScope) transformDeclrStmt(dn *Function, fn *ast.BlockStmt, sw *ast
 	var stmt DeclrExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
+	elem, err := b.transformFunctionExpr(sw.Decl, fn, dn, others)
+	if err != nil {
+		return nil, err
+	}
+
+	stmt.Declr = elem
 	return &stmt, nil
 }
 
@@ -1679,13 +1875,23 @@ func (b *ParseScope) transformGoStmt(dn *Function, fn *ast.BlockStmt, sw *ast.Go
 	var stmt GoExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
+	elem, err := b.transformFunctionExpr(sw.Call, fn, dn, others)
+	if err != nil {
+		return nil, err
+	}
+
+	called, ok := elem.(*CallExpr)
+	if !ok {
+		return nil, errors.New("type must be a *CallExpr: %#v", elem)
+	}
+
+	stmt.Fn = called
 	return &stmt, nil
 }
 
 func (b *ParseScope) transformBadStmt(dn *Function, fn *ast.BlockStmt, sw *ast.BadStmt, others map[string]*Package) (Expr, error) {
 	var stmt BadExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
-
 	return &stmt, nil
 }
 
@@ -1693,6 +1899,17 @@ func (b *ParseScope) transformDeferStmt(dn *Function, fn *ast.BlockStmt, sw *ast
 	var stmt DeferExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
+	elem, err := b.transformFunctionExpr(sw.Call, fn, dn, others)
+	if err != nil {
+		return nil, err
+	}
+
+	called, ok := elem.(*CallExpr)
+	if !ok {
+		return nil, errors.New("type must be a *CallExpr: %#v", elem)
+	}
+
+	stmt.Fn = called
 	return &stmt, nil
 }
 
@@ -1700,6 +1917,12 @@ func (b *ParseScope) transformBranchStmt(dn *Function, fn *ast.BlockStmt, sw *as
 	var stmt BranchExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
+	elem, err := b.transformFunctionExpr(sw.Label, fn, dn, others)
+	if err != nil {
+		return nil, err
+	}
+
+	stmt.Label = elem
 	return &stmt, nil
 }
 
@@ -1708,27 +1931,26 @@ func (b *ParseScope) transformAssignStmt(dn *Function, fn *ast.BlockStmt, sw *as
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
 	var leftHand []Identity
-	//for _, left := range sw.Lhs {
-	//	elem, err := b.transformTypeFor(left, others)
-	//	if err != nil {
-	//		return nil, err
-	//	}
-	//	leftHand = append(leftHand, elem)
-	//}
+	for _, left := range sw.Lhs {
+		elem, err := b.transformFunctionExpr(left, fn, dn, others)
+		if err != nil {
+			return nil, err
+		}
+		leftHand = append(leftHand, elem)
+	}
 
 	stmt.Left = leftHand
 
 	var rightHand []Identity
-	//for _, right := range sw.Rhs {
-	//	elem, err := b.transformTypeFor(right, others)
-	//	if err != nil {
-	//		return nil, err
-	//	}
-	//	leftHand = append(leftHand, elem)
-	//}
+	for _, right := range sw.Rhs {
+		elem, err := b.transformFunctionExpr(right, fn, dn, others)
+		if err != nil {
+			return nil, err
+		}
+		rightHand = append(rightHand, elem)
+	}
 
 	stmt.Right = rightHand
-
 	return &stmt, nil
 }
 
@@ -1757,11 +1979,44 @@ func (b *ParseScope) transformSwitchStatement(dn *Function, fn *ast.BlockStmt, s
 	var stmt SwitchExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
+	initd, err := b.transformStmt(dn, fn, sw.Init, others)
+	if err != nil {
+		return nil, err
+	}
+
+	stmt.Init = initd
+
+	body, err := b.transformStmt(dn, fn, sw.Body, others)
+	if err != nil {
+		return nil, err
+	}
+
+	gbody, ok := body.(*GroupStmt)
+	if !ok {
+		return nil, errors.New("body of RangeStmt must be type *GroupStmt")
+	}
+
+	stmt.Body = gbody
+
+	tags, err := b.transformFunctionExpr(sw.Tag, fn, dn, others)
+	if err != nil {
+		return nil, err
+	}
+
+	stmt.Tag = tags
+
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformTypeForFunction(e interface{}, fn *Function, others map[string]*Package) (Identity, error) {
+func (b *ParseScope) transformFunctionExpr(e interface{}, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (Expr, error) {
+	scope := b.scopes[fn.Path]
+	fmt.Printf("FunctionBody[%q] -> %#v : %#v\n", fn.Name, e, scope.Scope)
 
+	switch tm := e.(type) {
+	case *ast.Ident:
+		_ = tm
+	}
+	return nil, errors.New("unable to handle function body type: %#v", e)
 }
 
 //**********************************************************************************
@@ -3386,4 +3641,9 @@ func (b *ParseScope) findWithinPackage(ref string, targetPackage *Package) (Iden
 	}
 
 	return nil, errors.Wrap(ErrNotFound, "unable to find type for %q in %q", ref, targetPackage.Name)
+}
+
+type functionScope struct {
+	Fn    *Function
+	Scope map[string]Identity
 }
