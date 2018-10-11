@@ -18,9 +18,9 @@ especially during processing of function bodies and variables or types which cou
 go get -u github.com/gokit/astkit
 ```
 
-
 ## Usage
 
 ```go
-sudo, imported, err := astkit.Transform(context.Background(), "github.com/gokit/astkit/testbed/sudo")
+ctx := context.Background()
+sudo, imported, err := astkit.Transform(ctx, "github.com/gokit/sudo")
 ```
