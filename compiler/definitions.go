@@ -2826,7 +2826,7 @@ func (p Variable) ID() string {
 }
 
 // Resolve takes the list of indexed packages to internal structures
-// to resolve imported or internal types that they Pathwayerence. This is
+// to resolve imported or internal types that they can index. This is
 // used to ensure all package structures have direct link to parsed
 // type.
 func (p *Variable) Resolve(indexed map[string]*Package) error {
@@ -2837,7 +2837,6 @@ func (p *Variable) Resolve(indexed map[string]*Package) error {
 
 	// set resolution to true.
 	p.resolved = true
-
 	if p.resolver == nil {
 		return nil
 	}
