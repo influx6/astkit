@@ -147,7 +147,7 @@ func (p *PlatformPackage) GetConstant(addr string) (*Variable, error) {
 	if target, ok := p.Constants[addr]; ok {
 		return target, nil
 	}
-	return nil, errors.Wrap(ErrNotFound, "Constant with addrs %q not found", addr)
+	return nil, errors.New("Constant with addrs %q not found", addr)
 }
 
 // GetReference returns giving Expr which matches giving reference.
@@ -180,7 +180,7 @@ func (p *PlatformPackage) GetReference(ref string) (Expr, error) {
 		return target, nil
 	}
 
-	return nil, errors.Wrap(ErrNotFound, "reference %q not found in %q", ref, p.Name)
+	return nil, errors.New("reference %q not found in %q", ref, p.Name)
 }
 
 // GetVariable attempts to return Variable reference declared in Package.
@@ -189,7 +189,7 @@ func (p *PlatformPackage) GetVariable(addr string) (*Variable, error) {
 		return target, nil
 	}
 
-	return nil, errors.Wrap(ErrNotFound, "Variable with addrs %q not found", addr)
+	return nil, errors.New("Variable with addrs %q not found", addr)
 }
 
 // GetType attempts to return Type reference declared in Package.
@@ -197,7 +197,7 @@ func (p *PlatformPackage) GetType(addr string) (*Type, error) {
 	if target, ok := p.Types[addr]; ok {
 		return target, nil
 	}
-	return nil, errors.Wrap(ErrNotFound, "Type with addrs %q not found", addr)
+	return nil, errors.New("Type with addrs %q not found", addr)
 }
 
 // GetStruct attempts to return Struct reference declared in Package.
@@ -205,7 +205,7 @@ func (p *PlatformPackage) GetStruct(addr string) (*Struct, error) {
 	if target, ok := p.Structs[addr]; ok {
 		return target, nil
 	}
-	return nil, errors.Wrap(ErrNotFound, "Struct with addrs %q not found", addr)
+	return nil, errors.New("Struct with addrs %q not found", addr)
 }
 
 // GetInterface attempts to return interface reference declared in Package.
@@ -213,7 +213,7 @@ func (p *PlatformPackage) GetInterface(addr string) (*Interface, error) {
 	if target, ok := p.Interfaces[addr]; ok {
 		return target, nil
 	}
-	return nil, errors.Wrap(ErrNotFound, "Interface with addrs %q not found", addr)
+	return nil, errors.New("Interface with addrs %q not found", addr)
 }
 
 // GetFunctionFor attempts to return Function reference for giving package function declared
@@ -222,7 +222,7 @@ func (p *PlatformPackage) GetFunctionFor(addr string) (*Function, error) {
 	if target, ok := p.Functions[addr]; ok {
 		return target, nil
 	}
-	return nil, errors.Wrap(ErrNotFound, "function with addrs %q not found", addr)
+	return nil, errors.New("function with addrs %q not found", addr)
 }
 
 // GetMethodFor attempts to return Function reference for giving method associated
@@ -231,7 +231,7 @@ func (p *PlatformPackage) GetMethodFor(addr string) (*Function, error) {
 	if target, ok := p.Methods[addr]; ok {
 		return target, nil
 	}
-	return nil, errors.Wrap(ErrNotFound, "method with addrs %q not found", addr)
+	return nil, errors.New("method with addrs %q not found", addr)
 }
 
 func (p *PlatformPackage) addFunction(elem *Function) error {
@@ -310,7 +310,7 @@ func (p *Arch) GetConstant(targetName string, arch string) (*Variable, error) {
 		return targetMap.GetConstant(addr)
 	}
 
-	return nil, ErrNotFound
+	return nil, errors.New("not found")
 }
 
 // GetVariable attempts to return Variable reference declared in Package.
@@ -327,7 +327,7 @@ func (p *Arch) GetVariable(targetName string, arch string) (*Variable, error) {
 		return targetMap.GetConstant(addr)
 	}
 
-	return nil, ErrNotFound
+	return nil, errors.New("not found")
 }
 
 // GetType attempts to return Type reference declared in Package.
@@ -344,7 +344,7 @@ func (p *Arch) GetType(targetName string, arch string) (*Type, error) {
 		return targetMap.GetType(addr)
 	}
 
-	return nil, ErrNotFound
+	return nil, errors.New("not found")
 }
 
 // GetStruct attempts to return Struct reference declared in Package.
@@ -361,7 +361,7 @@ func (p *Arch) GetStruct(targetName string, arch string) (*Struct, error) {
 		return targetMap.GetStruct(addr)
 	}
 
-	return nil, ErrNotFound
+	return nil, errors.New("not found")
 }
 
 // GetInterface attempts to return interface reference declared in Package.
@@ -378,7 +378,7 @@ func (p *Arch) GetInterface(targetName string, arch string) (*Interface, error) 
 		return targetMap.GetInterface(addr)
 	}
 
-	return nil, ErrNotFound
+	return nil, errors.New("not found")
 }
 
 // GetFunctionFor attempts to return Function reference for giving package function declared
@@ -396,7 +396,7 @@ func (p *Arch) GetFunctionFor(targetName string, arch string) (*Function, error)
 		return targetMap.GetFunctionFor(addr)
 	}
 
-	return nil, ErrNotFound
+	return nil, errors.New("not found")
 }
 
 // GetMethodFor attempts to return Function reference for giving method associated
@@ -414,7 +414,7 @@ func (p *Arch) GetMethodFor(typeName string, targetName string, arch string) (*F
 		return targetMap.GetMethodFor(addr)
 	}
 
-	return nil, ErrNotFound
+	return nil, errors.New("not found")
 }
 
 // GetPlatform returns a new Platform package for a giving platform.
@@ -439,7 +439,7 @@ func (p *Arch) GetArch(arch string) *PlatformPackage {
 }
 
 // GetReferenceByArch returns giving Expr which matches giving reference for a set of architectures.
-// If non is found, then we check the platforms else return ErrNotFound.
+// If non is found, then we check the platforms else return errors.New("not found").
 func (p *Arch) GetReferenceByArch(ref string, archs map[string]bool) (Expr, error) {
 	for k := range archs {
 		if plat, ok := p.Archs[k]; ok {
@@ -455,11 +455,11 @@ func (p *Arch) GetReferenceByArch(ref string, archs map[string]bool) (Expr, erro
 		}
 	}
 
-	return nil, ErrNotFound
+	return nil, errors.New("not found")
 }
 
 // GetReference returns giving Expr which matches giving reference.
-// If non is found, then we check the platforms else return ErrNotFound.
+// If non is found, then we check the platforms else return errors.New("not found").
 func (p *Arch) GetReference(ref string) (Expr, error) {
 	for _, pkg := range p.Archs {
 		if pm, err := pkg.GetReference(ref); err == nil {
@@ -473,7 +473,7 @@ func (p *Arch) GetReference(ref string) (Expr, error) {
 		}
 	}
 
-	return nil, ErrNotFound
+	return nil, errors.New("not found")
 }
 
 // Package embodies a parsed Golang/Go based package,
@@ -495,6 +495,7 @@ type Package struct {
 	// All architecture allowed types and variables.
 	Blanks           []*Variable
 	NoNameStructs    []*Struct
+	Annotations      []Annotation
 	Depends          map[string]*Package
 	Variables        map[string]*Variable
 	Constants        map[string]*Variable
@@ -538,7 +539,7 @@ func (p *Package) GetConstant(targetName string, arch string) (*Variable, error)
 	if target, ok := p.Constants[addr]; ok {
 		return target, nil
 	}
-	return nil, errors.Wrap(ErrNotFound, "Constant with addrs %q not found", addr)
+	return nil, errors.New("Constant with addrs %q not found", addr)
 }
 
 // GetVariable attempts to return Variable reference declared in Package.
@@ -558,7 +559,7 @@ func (p *Package) GetVariable(targetName string, arch string) (*Variable, error)
 	if target, ok := p.Variables[addr]; ok {
 		return target, nil
 	}
-	return nil, errors.Wrap(ErrNotFound, "Variable with addrs %q not found", addr)
+	return nil, errors.New("Variable with addrs %q not found", addr)
 }
 
 // GetType attempts to return Type reference declared in Package.
@@ -577,7 +578,7 @@ func (p *Package) GetType(targetName string, arch string) (*Type, error) {
 	if target, ok := p.Types[addr]; ok {
 		return target, nil
 	}
-	return nil, errors.Wrap(ErrNotFound, "Type with addrs %q not found", addr)
+	return nil, errors.New("Type with addrs %q not found", addr)
 }
 
 // GetStruct attempts to return Struct reference declared in Package.
@@ -596,7 +597,7 @@ func (p *Package) GetStruct(targetName string, arch string) (*Struct, error) {
 	if target, ok := p.Structs[addr]; ok {
 		return target, nil
 	}
-	return nil, errors.Wrap(ErrNotFound, "Struct with addrs %q not found", addr)
+	return nil, errors.New("Struct with addrs %q not found", addr)
 }
 
 // GetInterface attempts to return interface reference declared in Package.
@@ -615,7 +616,7 @@ func (p *Package) GetInterface(targetName string, arch string) (*Interface, erro
 	if target, ok := p.Interfaces[addr]; ok {
 		return target, nil
 	}
-	return nil, errors.Wrap(ErrNotFound, "Interface with addrs %q not found", addr)
+	return nil, errors.New("Interface with addrs %q not found", addr)
 }
 
 // GetFunctionFor attempts to return Function reference for giving package function declared
@@ -635,7 +636,7 @@ func (p *Package) GetFunctionFor(targetName string, arch string) (*Function, err
 	if target, ok := p.Functions[addr]; ok {
 		return target, nil
 	}
-	return nil, errors.Wrap(ErrNotFound, "function with addrs %q not found", addr)
+	return nil, errors.New("function with addrs %q not found", addr)
 }
 
 // GetMethodFor attempts to return Function reference for giving method associated
@@ -656,7 +657,7 @@ func (p *Package) GetMethodFor(typeName string, targetName string, arch string) 
 	if target, ok := p.Methods[addr]; ok {
 		return target, nil
 	}
-	return nil, errors.Wrap(ErrNotFound, "method with addrs %q not found", addr)
+	return nil, errors.New("method with addrs %q not found", addr)
 }
 
 // GetReferenceByArchs returns a giving reference by targeting by map of architecture.
@@ -718,7 +719,7 @@ func (p *Package) GetAnyTypeFromArchs(targetName string, archs map[string]bool, 
 			return pm, nil
 		}
 	}
-	return nil, ErrNotFound
+	return nil, errors.New("not found")
 }
 
 // GetAnyType will attempt to retrieve giving type from package regardless of type, architecture
@@ -767,7 +768,7 @@ func (p *Package) GetReference(ref string) (Expr, error) {
 		return pm, nil
 	}
 
-	return nil, errors.Wrap(ErrNotFound, "reference %q not found in %q", ref, p.Name)
+	return nil, errors.New("reference %q not found in %q", ref, p.Name)
 }
 
 // Add adds giving declaration into package declaration
@@ -2779,7 +2780,7 @@ type Variable struct {
 	Type Expr
 
 	// Value defines giving value of variable.
-	Value interface{}
+	Value Expr
 
 	// Name represents the name of giving interface.
 	Name string
@@ -2851,6 +2852,10 @@ type Field struct {
 	Location
 	Commentaries
 
+	// Annotations holds a list of all annotations associated with giving
+	// function parsed from comments.
+	Annotations []Annotation
+
 	// Exported holds giving flag where field is an
 	// exported field or not.
 	Exported bool
@@ -2906,7 +2911,6 @@ func (p *Field) Resolve(indexed map[string]*Package) error {
 
 	// set resolution to true.
 	p.resolved = true
-
 	if p.resolver == nil {
 		return nil
 	}
@@ -2988,6 +2992,10 @@ type Type struct {
 	Location
 	Commentaries
 
+	// Annotations holds a list of all annotations associated with giving
+	// function parsed from comments.
+	Annotations []Annotation
+
 	// Name represents the name of giving interface.
 	Name string
 
@@ -3042,12 +3050,10 @@ func (p *Type) Resolve(indexed map[string]*Package) error {
 
 	// set resolution to true.
 	p.resolved = true
-	if p.resolver == nil {
-		return nil
-	}
-
-	if err := p.resolver(indexed); err != nil {
-		return err
+	if p.resolver != nil {
+		if err := p.resolver(indexed); err != nil {
+			return err
+		}
 	}
 
 	for _, method := range p.Methods {
@@ -3065,6 +3071,10 @@ type Interface struct {
 	Pathway
 	Location
 	Commentaries
+
+	// Annotations holds a list of all annotations associated with giving
+	// function parsed from comments.
+	Annotations []Annotation
 
 	// Meta provides associated package and commentary information related to
 	// giving type.
@@ -3118,12 +3128,10 @@ func (p *Interface) Resolve(indexed map[string]*Package) error {
 
 	// set resolution to true.
 	p.resolved = true
-	if p.resolver == nil {
-		return nil
-	}
-
-	if err := p.resolver(indexed); err != nil {
-		return err
+	if p.resolver != nil {
+		if err := p.resolver(indexed); err != nil {
+			return err
+		}
 	}
 
 	for _, method := range p.Methods {
@@ -3142,6 +3150,10 @@ type Struct struct {
 	Location
 	Commentaries
 
+	// Annotations holds a list of all annotations associated with giving
+	// function parsed from comments.
+	Annotations []Annotation
+
 	// Name represents the name of giving interface.
 	Name string
 
@@ -3150,7 +3162,7 @@ type Struct struct {
 
 	// Composes contains all interface types composed by
 	// given struct type.
-	Composes []Field
+	Composes []*Field
 
 	// Embeds contains all struct types composed by
 	// given struct type.
@@ -3158,7 +3170,7 @@ type Struct struct {
 
 	// Fields contains all fields and associated types declared
 	// as members of struct.
-	Fields map[string]Field
+	Fields map[string]*Field
 
 	// Methods contains all function defined as methods attached to
 	// struct instance.
@@ -3202,15 +3214,20 @@ func (p *Struct) Resolve(indexed map[string]*Package) error {
 
 	// set resolution to true.
 	p.resolved = true
-	if p.resolver == nil {
-		return nil
-	}
 
-	if err := p.resolver(indexed); err != nil {
-		return err
+	if p.resolver != nil {
+		if err := p.resolver(indexed); err != nil {
+			return err
+		}
 	}
 
 	for _, field := range p.Fields {
+		if err := field.Resolve(indexed); err != nil {
+			return err
+		}
+	}
+
+	for _, field := range p.Composes {
 		if err := field.Resolve(indexed); err != nil {
 			return err
 		}
@@ -3232,6 +3249,10 @@ type Function struct {
 	Pathway
 	Location
 	Commentaries
+
+	// Annotations holds a list of all annotations associated with giving
+	// function parsed from comments.
+	Annotations []Annotation
 
 	// Body is a GroupStmt which embodies all
 	// contents of giving function body if it has
@@ -3272,10 +3293,10 @@ type Function struct {
 	Owner Expr
 
 	// Arguments provides the argument list for giving function.
-	Arguments []Parameter
+	Arguments []*Parameter
 
 	// Arguments provides the argument list for giving function.
-	Returns []Parameter
+	Returns []*Parameter
 
 	// Meta provides associated package  and commentary information related to
 	// giving type.
@@ -3319,12 +3340,10 @@ func (p *Function) Resolve(indexed map[string]*Package) error {
 	}
 
 	p.resolved = true
-	if p.resolver == nil {
-		return nil
-	}
-
-	if err := p.resolver(indexed); err != nil {
-		return err
+	if p.resolver != nil {
+		if err := p.resolver(indexed); err != nil {
+			return err
+		}
 	}
 
 	for _, param := range p.Returns {

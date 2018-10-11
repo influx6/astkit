@@ -8,9 +8,9 @@ import (
 	"strings"
 )
 
-/* ParseAnnotationFromReader implements a short parser to transform annotation style text (i.e commands prefixed with @)
- into Annotation structures useful for indicating processing directives.
-
+// ParseAnnotationFromReader implements a short parser to transform annotation style text (i.e commands prefixed with @)
+// into Annotation structures useful for indicating processing directives.
+/*
  Annotations are of the format:
 
 	 1. @flatter

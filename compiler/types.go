@@ -1,6 +1,27 @@
 package compiler
 
 var (
+	// AnyType defines giving type as interface{}.
+	AnyType = &Type{
+		Name: "interface{}",
+	}
+
+	// ErrorType defines base package-wide error type.
+	ErrorType = &Interface{
+		Name: "error",
+		Methods: map[string]*Function{
+			"error.Error": {
+				Name: "Error",
+				Returns: []*Parameter{
+					{
+						Name: "string",
+						Type: BaseFor("string"),
+					},
+				},
+			},
+		},
+	}
+
 	unsafeAbitraryType = &Type{
 		Exported: true,
 		Name:     "ArbitraryType",
@@ -67,13 +88,13 @@ var (
 		Exported: true,
 		Name:     "Alignof",
 		Meta:     Meta{Name: "unsafe", Path: "unsafe"},
-		Arguments: []Parameter{
+		Arguments: []*Parameter{
 			{
 				Name: "x",
 				Type: unsafeAbitraryType,
 			},
 		},
-		Returns: []Parameter{
+		Returns: []*Parameter{
 			{
 				Name: "",
 				Type: BaseFor("uintptr"),
@@ -118,13 +139,13 @@ var (
 		Exported: true,
 		Name:     "Offset",
 		Meta:     Meta{Name: "unsafe", Path: "unsafe"},
-		Arguments: []Parameter{
+		Arguments: []*Parameter{
 			{
 				Name: "x",
 				Type: unsafeAbitraryType,
 			},
 		},
-		Returns: []Parameter{
+		Returns: []*Parameter{
 			{
 				Name: "",
 				Type: BaseFor("uintptr"),
@@ -160,13 +181,13 @@ var (
 		Exported: true,
 		Name:     "Sizeof",
 		Meta:     Meta{Name: "unsafe", Path: "unsafe"},
-		Arguments: []Parameter{
+		Arguments: []*Parameter{
 			{
 				Name: "x",
 				Type: unsafeAbitraryType,
 			},
 		},
-		Returns: []Parameter{
+		Returns: []*Parameter{
 			{
 				Name: "",
 				Type: BaseFor("uintptr"),

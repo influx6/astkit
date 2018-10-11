@@ -274,7 +274,7 @@ func getExprName(n interface{}) (string, error) {
 	case *ast.SelectorExpr:
 		return getExprName(t.X)
 	default:
-		return "", Error("unable to get name")
+		return "", errors.New("unable to get name")
 	}
 }
 

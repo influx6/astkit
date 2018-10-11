@@ -16,18 +16,6 @@ import (
 )
 
 //*********************************************
-// Error
-//*********************************************
-
-// Error implements a custom error type for package to
-// provide consistency and constancy of type and value.
-type Error string
-
-func (e Error) Error() string {
-	return string(e)
-}
-
-//*********************************************
 // Loader
 //*********************************************
 

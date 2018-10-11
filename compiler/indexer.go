@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"bytes"
 	"go/ast"
 	"go/token"
 	"go/types"
@@ -22,13 +23,16 @@ import (
 	"golang.org/x/tools/go/loader"
 )
 
-// errors
-const (
-	ErrNotFound = Error("target not found")
-)
-
 const (
 	blankIdentifier = "_"
+)
+
+var (
+	buffers = sync.Pool{
+		New: func() interface{} {
+			return bytes.NewBuffer(make([]byte, 0, 512))
+		},
+	}
 )
 
 // Indexer implements a golang ast index which parses
@@ -47,6 +51,14 @@ func NewIndexer(c Cg) *Indexer {
 	return &Indexer{
 		C:       &c,
 		indexed: map[string]*Package{},
+	}
+}
+
+// PreloadedIndexer returns a new instance of an Indexer.
+func PreloadedIndexer(c Cg, preload map[string]*Package) *Indexer {
+	return &Indexer{
+		C:       &c,
+		indexed: preload,
 	}
 }
 
@@ -542,6 +554,15 @@ func (b *ParseScope) transformVariable(mindex int, named *ast.Ident, val *ast.Va
 		}
 
 		declr.Doc = doc
+
+		buff := buffers.Get().(*bytes.Buffer)
+		buff.WriteString(val.Doc.Text())
+		if annons := ParseAnnotationFromReader(buff); len(annons) != 0 {
+			declr.Annotations = append(declr.Annotations, annons...)
+		}
+
+		buff.Reset()
+		buffers.Put(buff)
 	}
 
 	if val.Comment != nil {
@@ -551,6 +572,15 @@ func (b *ParseScope) transformVariable(mindex int, named *ast.Ident, val *ast.Va
 			return nil, cerr
 		}
 		declr.Docs = append(declr.Docs, doc)
+
+		buff := buffers.Get().(*bytes.Buffer)
+		buff.WriteString(val.Comment.Text())
+		if annons := ParseAnnotationFromReader(buff); len(annons) != 0 {
+			declr.Annotations = append(declr.Annotations, annons...)
+		}
+
+		buff.Reset()
+		buffers.Put(buff)
 	}
 
 	obj := b.Info.ObjectOf(named)
@@ -639,7 +669,7 @@ func (b *ParseScope) transformStructDeclr(str *ast.StructType, ty *ast.TypeSpec,
 	}
 
 	declr.Name = structName
-	declr.Fields = map[string]Field{}
+	declr.Fields = map[string]*Field{}
 	declr.Embeds = map[string]*Struct{}
 	declr.Methods = map[string]*Function{}
 	declr.Location = b.getLocation(ty.Pos(), ty.End())
@@ -652,9 +682,19 @@ func (b *ParseScope) transformStructDeclr(str *ast.StructType, ty *ast.TypeSpec,
 		}
 
 		declr.Doc = doc
+
+		buff := buffers.Get().(*bytes.Buffer)
+		buff.WriteString(gen.Doc.Text())
+
+		if annons := ParseAnnotationFromReader(buff); len(annons) != 0 {
+			declr.Annotations = append(declr.Annotations, annons...)
+		}
+
+		buff.Reset()
+		buffers.Put(buff)
 	}
 
-	if ty.Doc != nil {
+	if ty.Doc != nil && ty.Doc != gen.Doc {
 		b.comments[ty.Doc] = struct{}{}
 		doc, err := b.handleCommentGroup(ty.Doc)
 		if err != nil {
@@ -662,6 +702,15 @@ func (b *ParseScope) transformStructDeclr(str *ast.StructType, ty *ast.TypeSpec,
 		}
 
 		declr.Docs = append(declr.Docs, doc)
+
+		buff := buffers.Get().(*bytes.Buffer)
+		buff.WriteString(ty.Doc.Text())
+		if annons := ParseAnnotationFromReader(buff); len(annons) != 0 {
+			declr.Annotations = append(declr.Annotations, annons...)
+		}
+
+		buff.Reset()
+		buffers.Put(buff)
 	}
 
 	if ty.Comment != nil {
@@ -672,6 +721,15 @@ func (b *ParseScope) transformStructDeclr(str *ast.StructType, ty *ast.TypeSpec,
 		}
 
 		declr.Docs = append(declr.Docs, doc)
+
+		buff := buffers.Get().(*bytes.Buffer)
+		buff.WriteString(ty.Comment.Text())
+		if annons := ParseAnnotationFromReader(buff); len(annons) != 0 {
+			declr.Annotations = append(declr.Annotations, annons...)
+		}
+
+		buff.Reset()
+		buffers.Put(buff)
 	}
 
 	obj := b.Info.ObjectOf(ty.Name)
@@ -680,14 +738,13 @@ func (b *ParseScope) transformStructDeclr(str *ast.StructType, ty *ast.TypeSpec,
 	declr.Meta.Path = obj.Pkg().Path()
 	declr.Path = strings.Join([]string{obj.Pkg().Path(), structName}, ".")
 
-	var resolvers []ResolverFn
-
 	for _, field := range str.Fields.List {
 		if len(field.Names) == 0 {
 			fl, err := b.handleField(structName, field, field.Type)
 			if err != nil {
 				return nil, err
 			}
+
 			declr.Composes = append(declr.Composes, fl)
 			continue
 		}
@@ -699,15 +756,6 @@ func (b *ParseScope) transformStructDeclr(str *ast.StructType, ty *ast.TypeSpec,
 			}
 			declr.Fields[fl.Name] = fl
 		}
-	}
-
-	declr.resolver = func(others map[string]*Package) error {
-		for _, resolver := range resolvers {
-			if err := resolver(others); err != nil {
-				return err
-			}
-		}
-		return nil
 	}
 
 	return &declr, nil
@@ -739,9 +787,19 @@ func (b *ParseScope) transformInterfaceSpec(str *ast.InterfaceType, ty *ast.Type
 		}
 
 		declr.Doc = doc
+
+		buff := buffers.Get().(*bytes.Buffer)
+		buff.WriteString(gen.Doc.Text())
+
+		if annons := ParseAnnotationFromReader(buff); len(annons) != 0 {
+			declr.Annotations = append(declr.Annotations, annons...)
+		}
+
+		buff.Reset()
+		buffers.Put(buff)
 	}
 
-	if ty.Doc != nil {
+	if ty.Doc != nil && ty.Doc != gen.Doc {
 		b.comments[ty.Doc] = struct{}{}
 		doc, err := b.handleCommentGroup(ty.Doc)
 		if err != nil {
@@ -749,6 +807,16 @@ func (b *ParseScope) transformInterfaceSpec(str *ast.InterfaceType, ty *ast.Type
 		}
 
 		declr.Docs = append(declr.Docs, doc)
+
+		buff := buffers.Get().(*bytes.Buffer)
+		buff.WriteString(ty.Doc.Text())
+
+		if annons := ParseAnnotationFromReader(buff); len(annons) != 0 {
+			declr.Annotations = append(declr.Annotations, annons...)
+		}
+
+		buff.Reset()
+		buffers.Put(buff)
 	}
 
 	if ty.Comment != nil {
@@ -759,6 +827,16 @@ func (b *ParseScope) transformInterfaceSpec(str *ast.InterfaceType, ty *ast.Type
 		}
 
 		declr.Docs = append(declr.Docs, doc)
+
+		buff := buffers.Get().(*bytes.Buffer)
+		buff.WriteString(ty.Comment.Text())
+
+		if annons := ParseAnnotationFromReader(buff); len(annons) != 0 {
+			declr.Annotations = append(declr.Annotations, annons...)
+		}
+
+		buff.Reset()
+		buffers.Put(buff)
 	}
 
 	obj := b.Info.ObjectOf(ty.Name)
@@ -825,9 +903,19 @@ func (b *ParseScope) transformNamedTypeSpec(ty *ast.TypeSpec, spec ast.Spec, gen
 		}
 
 		declr.Doc = doc
+
+		buff := buffers.Get().(*bytes.Buffer)
+		buff.WriteString(gen.Doc.Text())
+
+		if annons := ParseAnnotationFromReader(buff); len(annons) != 0 {
+			declr.Annotations = append(declr.Annotations, annons...)
+		}
+
+		buff.Reset()
+		buffers.Put(buff)
 	}
 
-	if ty.Doc != nil {
+	if ty.Doc != nil && gen.Doc != ty.Doc {
 		b.comments[ty.Doc] = struct{}{}
 		doc, err := b.handleCommentGroup(ty.Doc)
 		if err != nil {
@@ -835,6 +923,16 @@ func (b *ParseScope) transformNamedTypeSpec(ty *ast.TypeSpec, spec ast.Spec, gen
 		}
 
 		declr.Docs = append(declr.Docs, doc)
+
+		buff := buffers.Get().(*bytes.Buffer)
+		buff.WriteString(ty.Doc.Text())
+
+		if annons := ParseAnnotationFromReader(buff); len(annons) != 0 {
+			declr.Annotations = append(declr.Annotations, annons...)
+		}
+
+		buff.Reset()
+		buffers.Put(buff)
 	}
 
 	if ty.Comment != nil {
@@ -845,6 +943,16 @@ func (b *ParseScope) transformNamedTypeSpec(ty *ast.TypeSpec, spec ast.Spec, gen
 		}
 
 		declr.Docs = append(declr.Docs, doc)
+
+		buff := buffers.Get().(*bytes.Buffer)
+		buff.WriteString(ty.Comment.Text())
+
+		if annons := ParseAnnotationFromReader(buff); len(annons) != 0 {
+			declr.Annotations = append(declr.Annotations, annons...)
+		}
+
+		buff.Reset()
+		buffers.Put(buff)
 	}
 
 	obj := b.Info.ObjectOf(ty.Name)
@@ -906,6 +1014,16 @@ func (b *ParseScope) transformFunctionSpec(fn *ast.FuncDecl) (*Function, error) 
 		}
 
 		declr.Doc = doc
+
+		buff := buffers.Get().(*bytes.Buffer)
+		buff.WriteString(fn.Doc.Text())
+
+		if annons := ParseAnnotationFromReader(buff); len(annons) != 0 {
+			declr.Annotations = append(declr.Annotations, annons...)
+		}
+
+		buff.Reset()
+		buffers.Put(buff)
 	}
 
 	// read location information(line, column, source text etc) for giving type.
@@ -1089,8 +1207,8 @@ func (b *ParseScope) handleFunctionType(name string, fn *ast.FuncType) (*Functio
 	return &declr, nil
 }
 
-func (b *ParseScope) handleFunctionFieldList(ownerName string, set *ast.FieldList) ([]Function, error) {
-	var params []Function
+func (b *ParseScope) handleFunctionFieldList(ownerName string, set *ast.FieldList) ([]*Function, error) {
+	var params []*Function
 	for _, param := range set.List {
 		if len(param.Names) == 0 {
 			p, err := b.handleFunctionField(ownerName, param, param.Type)
@@ -1098,7 +1216,7 @@ func (b *ParseScope) handleFunctionFieldList(ownerName string, set *ast.FieldLis
 				return params, err
 			}
 
-			params = append(params, *p)
+			params = append(params, p)
 			continue
 		}
 
@@ -1110,14 +1228,14 @@ func (b *ParseScope) handleFunctionFieldList(ownerName string, set *ast.FieldLis
 				return params, err
 			}
 
-			params = append(params, *p)
+			params = append(params, p)
 		}
 	}
 	return params, nil
 }
 
-func (b *ParseScope) handleFieldList(ownerName string, set *ast.FieldList) ([]Field, error) {
-	var params []Field
+func (b *ParseScope) handleFieldList(ownerName string, set *ast.FieldList) ([]*Field, error) {
+	var params []*Field
 	for _, param := range set.List {
 		if len(param.Names) == 0 {
 			p, err := b.handleField(ownerName, param, param.Type)
@@ -1143,8 +1261,8 @@ func (b *ParseScope) handleFieldList(ownerName string, set *ast.FieldList) ([]Fi
 	return params, nil
 }
 
-func (b *ParseScope) handleFieldMap(ownerName string, set *ast.FieldList) (map[string]Field, error) {
-	params := map[string]Field{}
+func (b *ParseScope) handleFieldMap(ownerName string, set *ast.FieldList) (map[string]*Field, error) {
+	params := map[string]*Field{}
 
 	// If we have name as a named Field or named return then
 	// appropriately
@@ -1162,8 +1280,8 @@ func (b *ParseScope) handleFieldMap(ownerName string, set *ast.FieldList) (map[s
 	return params, nil
 }
 
-func (b *ParseScope) handleParameterList(fnName string, set *ast.FieldList) ([]Parameter, error) {
-	var params []Parameter
+func (b *ParseScope) handleParameterList(fnName string, set *ast.FieldList) ([]*Parameter, error) {
+	var params []*Parameter
 	for _, param := range set.List {
 		if len(param.Names) == 0 {
 			p, err := b.handleParameter(fnName, param, param.Type)
@@ -1231,6 +1349,16 @@ func (b *ParseScope) handleFunctionField(ownerName string, f *ast.Field, t ast.E
 			return nil, cerr
 		}
 		p.Docs = append(p.Docs, doc)
+
+		buff := buffers.Get().(*bytes.Buffer)
+		buff.WriteString(f.Doc.Text())
+
+		if annons := ParseAnnotationFromReader(buff); len(annons) != 0 {
+			p.Annotations = append(p.Annotations, annons...)
+		}
+
+		buff.Reset()
+		buffers.Put(buff)
 	}
 
 	if f.Comment != nil {
@@ -1240,6 +1368,16 @@ func (b *ParseScope) handleFunctionField(ownerName string, f *ast.Field, t ast.E
 			return nil, cerr
 		}
 		p.Docs = append(p.Docs, doc)
+
+		buff := buffers.Get().(*bytes.Buffer)
+		buff.WriteString(f.Comment.Text())
+
+		if annons := ParseAnnotationFromReader(buff); len(annons) != 0 {
+			p.Annotations = append(p.Annotations, annons...)
+		}
+
+		buff.Reset()
+		buffers.Put(buff)
 	}
 
 	pAddr := &p
@@ -1276,6 +1414,16 @@ func (b *ParseScope) handleFunctionFieldWithName(ownerName string, f *ast.Field,
 			return nil, cerr
 		}
 		p.Docs = append(p.Docs, doc)
+
+		buff := buffers.Get().(*bytes.Buffer)
+		buff.WriteString(f.Doc.Text())
+
+		if annons := ParseAnnotationFromReader(buff); len(annons) != 0 {
+			p.Annotations = append(p.Annotations, annons...)
+		}
+
+		buff.Reset()
+		buffers.Put(buff)
 	}
 
 	if f.Comment != nil {
@@ -1285,6 +1433,16 @@ func (b *ParseScope) handleFunctionFieldWithName(ownerName string, f *ast.Field,
 			return nil, cerr
 		}
 		p.Docs = append(p.Docs, doc)
+
+		buff := buffers.Get().(*bytes.Buffer)
+		buff.WriteString(f.Comment.Text())
+
+		if annons := ParseAnnotationFromReader(buff); len(annons) != 0 {
+			p.Annotations = append(p.Annotations, annons...)
+		}
+
+		buff.Reset()
+		buffers.Put(buff)
 	}
 
 	obj := b.Info.ObjectOf(nm)
@@ -1311,7 +1469,7 @@ func (b *ParseScope) handleFunctionFieldWithName(ownerName string, f *ast.Field,
 	return p, nil
 }
 
-func (b *ParseScope) handleField(ownerName string, f *ast.Field, t ast.Expr) (Field, error) {
+func (b *ParseScope) handleField(ownerName string, f *ast.Field, t ast.Expr) (*Field, error) {
 	var p Field
 
 	if f.Tag != nil {
@@ -1325,7 +1483,7 @@ func (b *ParseScope) handleField(ownerName string, f *ast.Field, t ast.Expr) (Fi
 		b.comments[f.Doc] = struct{}{}
 		doc, cerr := b.handleCommentGroup(f.Doc)
 		if cerr != nil {
-			return p, cerr
+			return nil, cerr
 		}
 		p.Docs = append(p.Docs, doc)
 	}
@@ -1334,7 +1492,7 @@ func (b *ParseScope) handleField(ownerName string, f *ast.Field, t ast.Expr) (Fi
 		b.comments[f.Comment] = struct{}{}
 		doc, cerr := b.handleCommentGroup(f.Comment)
 		if cerr != nil {
-			return p, cerr
+			return nil, cerr
 		}
 		p.Docs = append(p.Docs, doc)
 	}
@@ -1363,10 +1521,10 @@ func (b *ParseScope) handleField(ownerName string, f *ast.Field, t ast.Expr) (Fi
 		return nil
 	}
 
-	return p, nil
+	return pAddr, nil
 }
 
-func (b *ParseScope) handleFieldWithName(ownerName string, f *ast.Field, nm *ast.Ident, t ast.Expr) (Field, error) {
+func (b *ParseScope) handleFieldWithName(ownerName string, f *ast.Field, nm *ast.Ident, t ast.Expr) (*Field, error) {
 	var p Field
 	p.Name = nm.Name
 
@@ -1378,7 +1536,7 @@ func (b *ParseScope) handleFieldWithName(ownerName string, f *ast.Field, nm *ast
 		b.comments[f.Doc] = struct{}{}
 		doc, cerr := b.handleCommentGroup(f.Doc)
 		if cerr != nil {
-			return p, cerr
+			return nil, cerr
 		}
 		p.Docs = append(p.Docs, doc)
 	}
@@ -1387,7 +1545,7 @@ func (b *ParseScope) handleFieldWithName(ownerName string, f *ast.Field, nm *ast
 		b.comments[f.Comment] = struct{}{}
 		doc, cerr := b.handleCommentGroup(f.Comment)
 		if cerr != nil {
-			return p, cerr
+			return nil, cerr
 		}
 		p.Docs = append(p.Docs, doc)
 	}
@@ -1423,17 +1581,17 @@ func (b *ParseScope) handleFieldWithName(ownerName string, f *ast.Field, nm *ast
 		return nil
 	}
 
-	return p, nil
+	return pAddr, nil
 }
 
-func (b *ParseScope) handleParameter(fnName string, f *ast.Field, t ast.Expr) (Parameter, error) {
+func (b *ParseScope) handleParameter(fnName string, f *ast.Field, t ast.Expr) (*Parameter, error) {
 	var p Parameter
 
 	if f.Doc != nil {
 		b.comments[f.Doc] = struct{}{}
 		doc, cerr := b.handleCommentGroup(f.Doc)
 		if cerr != nil {
-			return p, cerr
+			return nil, cerr
 		}
 		p.Docs = append(p.Docs, doc)
 	}
@@ -1442,7 +1600,7 @@ func (b *ParseScope) handleParameter(fnName string, f *ast.Field, t ast.Expr) (P
 		b.comments[f.Comment] = struct{}{}
 		doc, cerr := b.handleCommentGroup(f.Comment)
 		if cerr != nil {
-			return p, cerr
+			return nil, cerr
 		}
 		p.Docs = append(p.Docs, doc)
 	}
@@ -1462,7 +1620,7 @@ func (b *ParseScope) handleParameter(fnName string, f *ast.Field, t ast.Expr) (P
 			pAddr.Type = tl
 			return nil
 		}
-		return p, nil
+		return pAddr, nil
 	}
 
 	p.resolver = func(others map[string]*Package) error {
@@ -1488,10 +1646,10 @@ func (b *ParseScope) handleParameter(fnName string, f *ast.Field, t ast.Expr) (P
 		return nil
 	}
 
-	return p, nil
+	return pAddr, nil
 }
 
-func (b *ParseScope) handleParameterWithName(fnName string, f *ast.Field, nm *ast.Ident, t ast.Expr) (Parameter, error) {
+func (b *ParseScope) handleParameterWithName(fnName string, f *ast.Field, nm *ast.Ident, t ast.Expr) (*Parameter, error) {
 	var p Parameter
 	p.Name = nm.Name
 
@@ -1502,7 +1660,7 @@ func (b *ParseScope) handleParameterWithName(fnName string, f *ast.Field, nm *as
 		b.comments[f.Doc] = struct{}{}
 		doc, cerr := b.handleCommentGroup(f.Doc)
 		if cerr != nil {
-			return p, cerr
+			return nil, cerr
 		}
 		p.Docs = append(p.Docs, doc)
 	}
@@ -1511,7 +1669,7 @@ func (b *ParseScope) handleParameterWithName(fnName string, f *ast.Field, nm *as
 		b.comments[f.Comment] = struct{}{}
 		doc, cerr := b.handleCommentGroup(f.Comment)
 		if cerr != nil {
-			return p, cerr
+			return nil, cerr
 		}
 		p.Docs = append(p.Docs, doc)
 	}
@@ -1531,7 +1689,7 @@ func (b *ParseScope) handleParameterWithName(fnName string, f *ast.Field, nm *as
 			pAddr.Type = tl
 			return nil
 		}
-		return p, nil
+		return pAddr, nil
 	}
 
 	p.resolver = func(others map[string]*Package) error {
@@ -1556,7 +1714,7 @@ func (b *ParseScope) handleParameterWithName(fnName string, f *ast.Field, nm *as
 		return nil
 	}
 
-	return p, nil
+	return pAddr, nil
 }
 
 func (b *ParseScope) handleBuildCommentary() {
@@ -1623,6 +1781,16 @@ func (b *ParseScope) handleCommentaries() error {
 		if err != nil {
 			return err
 		}
+
+		buff := buffers.Get().(*bytes.Buffer)
+		buff.WriteString(doc.Text)
+
+		if annons := ParseAnnotationFromReader(buff); len(annons) != 0 {
+			b.From.Annotations = append(b.From.Annotations, annons...)
+		}
+
+		buff.Reset()
+		buffers.Put(buff)
 
 		b.Package.Docs = append(b.Package.Docs, doc)
 	}
@@ -1719,7 +1887,7 @@ func (b *ParseScope) getImport(aliasName string) (Import, error) {
 	if imp, ok := b.Package.Imports[aliasName]; ok {
 		return imp, nil
 	}
-	return Import{}, errors.Wrap(ErrNotFound, "import path with alias %q not found", aliasName)
+	return Import{}, errors.New("import path with alias %q not found", aliasName)
 }
 
 func (b *ParseScope) getTypeFromTypeSpecExpr(e ast.Expr, t *ast.TypeSpec, others map[string]*Package) (Expr, error) {
@@ -2642,7 +2810,7 @@ func (b *ParseScope) transformFunctionIdentExpr(base *ast.Ident, bn *ast.BlockSt
 	// If its not then we are probably dealing with a previously the functions
 	// argument or returned types.
 	var found bool
-	var target Parameter
+	var target *Parameter
 	for _, arg := range fn.Arguments {
 		if arg.Name == base.Name {
 			target = arg
@@ -2822,7 +2990,7 @@ func (b *ParseScope) runScopeTree(base *ast.Ident, path string) (Expr, error) {
 	if !ok {
 		return &UnknownExpr{
 			File:  b.Package,
-			Error: errors.Wrap(ErrNotFound, "property %q in %q not found in scope tree %q", base.Name, path),
+			Error: errors.New("property %q in %q not found in scope tree %q", base.Name, path),
 		}, nil
 	}
 
@@ -2903,7 +3071,7 @@ func (b *ParseScope) transformFunctionSelectorExprWithXIdent(base *ast.Ident, e 
 	// If its not then we are probably dealing with a previously the functions
 	// argument or returned types.
 	var found bool
-	var target Parameter
+	var target *Parameter
 	for _, arg := range fn.Arguments {
 		if arg.Name == base.Name {
 			target = arg
@@ -2939,7 +3107,7 @@ func (b *ParseScope) transformFunctionSelectorExprWithXIdent(base *ast.Ident, e 
 
 		// This means we should have value for ast.Selector.Sel else return an error.
 		if e.Sel == nil {
-			return nil, errors.Wrap(ErrNotFound, "property %q within function %q not scoped through variable assigned", base.Name, fn.Name)
+			return nil, errors.New("property %q within function %q not scoped through variable assigned", base.Name, fn.Name)
 		}
 
 		// Case 3:
@@ -3012,7 +3180,7 @@ func (b *ParseScope) transformFunctionSelectorExprWithXIdent(base *ast.Ident, e 
 	scopedTargetPath := strings.Join([]string{target.Name, e.Sel.Name}, ".")
 
 	// Search for desired property from underline parameter type.
-	id, err := b.locateRefFromObject([]string{e.Sel.Name}, &target, others)
+	id, err := b.locateRefFromObject([]string{e.Sel.Name}, target, others)
 	if err != nil {
 		return nil, err
 	}
@@ -3455,7 +3623,7 @@ func (b *ParseScope) transformTypeFor(e interface{}, others map[string]*Package)
 		return b.transformFuncType(core, others)
 	}
 
-	return nil, errors.Wrap(ErrNotFound, "unable to handle type: %#v", e)
+	return nil, errors.New("unable to handle type: %#v", e)
 }
 
 func (b *ParseScope) transformTypeAssertExpr(src *ast.TypeAssertExpr, others map[string]*Package) (*TypeAssert, error) {
@@ -4143,7 +4311,7 @@ func (b *ParseScope) transformSignatureWithObject(signature *types.Signature, ob
 				return fn, err
 			}
 
-			var field Parameter
+			field := new(Parameter)
 			field.Type = ft
 			field.Name = vard.Name()
 			fn.Returns = append(fn.Returns, field)
@@ -4158,7 +4326,7 @@ func (b *ParseScope) transformSignatureWithObject(signature *types.Signature, ob
 				return fn, err
 			}
 
-			var field Parameter
+			field := new(Parameter)
 			field.Type = ft
 			field.Name = vard.Name()
 			fn.Returns = append(fn.Returns, field)
@@ -4181,7 +4349,7 @@ func (b *ParseScope) locateStructWithObject(e *types.Struct, named *types.Named,
 
 	targetPackage, ok := others[myPackage.Path()]
 	if !ok {
-		return nil, errors.Wrap(ErrNotFound, "Unable to find target package %q", obj.Pkg().Path())
+		return nil, errors.New("Unable to find target package %q", obj.Pkg().Path())
 	}
 
 	ref := strings.Join([]string{targetPackage.Name, named.Obj().Name()}, ".")
@@ -4193,7 +4361,7 @@ func (b *ParseScope) locateStructWithObject(e *types.Struct, named *types.Named,
 	for _, stage := range imported {
 		targetPackage, ok := others[stage.Path()]
 		if !ok {
-			return nil, errors.Wrap(ErrNotFound, "Unable to find imported package %q", stage.Path())
+			return nil, errors.New("Unable to find imported package %q", stage.Path())
 		}
 
 		ref := strings.Join([]string{targetPackage.Name, named.Obj().Name()}, ".")
@@ -4202,7 +4370,7 @@ func (b *ParseScope) locateStructWithObject(e *types.Struct, named *types.Named,
 		}
 	}
 
-	return nil, errors.Wrap(ErrNotFound, "Unable to find target struct %q from package %q or its imported set", named.Obj().Name(), named.Obj().Pkg().Path())
+	return nil, errors.New("Unable to find target struct %q from package %q or its imported set", named.Obj().Name(), named.Obj().Pkg().Path())
 }
 
 func (b *ParseScope) locateReferencedExpr(location typeExpr, others map[string]*Package) (Expr, error) {
@@ -4212,7 +4380,7 @@ func (b *ParseScope) locateReferencedExpr(location typeExpr, others map[string]*
 
 	targetPackage, ok := others[location.Package]
 	if !ok {
-		return nil, errors.Wrap(ErrNotFound, "unable to find package for %q", location.Package)
+		return nil, errors.New("unable to find package for %q", location.Package)
 	}
 
 	if found, err := targetPackage.GetReferenceByArchs(location.Text, b.Package.Archs, b.Package.Cgo); err == nil {
@@ -4233,7 +4401,7 @@ func (b *ParseScope) locateInterfaceWithObject(e *types.Interface, named *types.
 	myPackage := obj.Pkg()
 	targetPackage, ok := others[myPackage.Path()]
 	if !ok {
-		return nil, errors.Wrap(ErrNotFound, "Unable to find target package %q", obj.Pkg().Path())
+		return nil, errors.New("Unable to find target package %q", obj.Pkg().Path())
 	}
 
 	ref := strings.Join([]string{targetPackage.Name, named.Obj().Name()}, ".")
@@ -4245,7 +4413,7 @@ func (b *ParseScope) locateInterfaceWithObject(e *types.Interface, named *types.
 	for _, stage := range imported {
 		targetPackage, ok := others[stage.Path()]
 		if !ok {
-			return nil, errors.Wrap(ErrNotFound, "Unable to find imported package %q", stage.Path())
+			return nil, errors.New("Unable to find imported package %q", stage.Path())
 		}
 
 		ref := strings.Join([]string{targetPackage.Name, named.Obj().Name()}, ".")
@@ -4258,7 +4426,7 @@ func (b *ParseScope) locateInterfaceWithObject(e *types.Interface, named *types.
 		return b.transformPackagelessObject(named, named.Obj(), others)
 	}
 
-	return nil, errors.Wrap(ErrNotFound, "Unable to find target Interface %q from package %q or its imported set", named.Obj().Name(), named.Obj().Pkg().Path())
+	return nil, errors.New("Unable to find target Interface %q from package %q or its imported set", named.Obj().Name(), named.Obj().Pkg().Path())
 }
 
 func (b *ParseScope) transformStructWithNamed(e *types.Struct, named *types.Named, others map[string]*Package) (Expr, error) {
@@ -4343,7 +4511,7 @@ func (b *ParseScope) transformInterfaceType(e *ast.InterfaceType, others map[str
 
 func (b *ParseScope) transformStructType(e *ast.StructType, others map[string]*Package) (*Struct, error) {
 	var declr Struct
-	declr.Fields = map[string]Field{}
+	declr.Fields = map[string]*Field{}
 	declr.Name = String(10)
 	declr.Path = strings.Join([]string{b.From.Name, declr.Name}, ".")
 
@@ -4493,7 +4661,7 @@ func (b *ParseScope) transformFuncType(e *ast.FuncType, others map[string]*Packa
 	declr.Location = b.getLocation(e.Pos(), e.End())
 
 	if e.Params != nil {
-		var params []Parameter
+		var params []*Parameter
 		for _, param := range e.Params.List {
 			if len(param.Names) == 0 {
 				p, err := b.handleParameter("func", param, param.Type)
@@ -4529,7 +4697,7 @@ func (b *ParseScope) transformFuncType(e *ast.FuncType, others map[string]*Packa
 	}
 
 	if e.Results != nil {
-		var params []Parameter
+		var params []*Parameter
 		for _, param := range e.Params.List {
 			if len(param.Names) == 0 {
 				p, err := b.handleParameter("func", param, param.Type)
@@ -4588,7 +4756,7 @@ func (b *ParseScope) transformSignature(signature *types.Signature, others map[s
 				return nil, err
 			}
 
-			var field Parameter
+			field := new(Parameter)
 			field.Type = ft
 			field.Name = vard.Name()
 			fn.Returns = append(fn.Returns, field)
@@ -4603,7 +4771,7 @@ func (b *ParseScope) transformSignature(signature *types.Signature, others map[s
 				return nil, err
 			}
 
-			var field Parameter
+			field := new(Parameter)
 			field.Type = ft
 			field.Name = vard.Name()
 			fn.Returns = append(fn.Returns, field)
@@ -4669,7 +4837,7 @@ func (b *ParseScope) transformStruct(e *types.Struct, others map[string]*Package
 	var declr Struct
 	declr.Name = String(10)
 	declr.Path = strings.Join([]string{b.From.Name, declr.Name}, ".")
-	declr.Fields = map[string]Field{}
+	declr.Fields = map[string]*Field{}
 
 	for i := 0; i < e.NumFields(); i++ {
 		field := e.Field(i)
@@ -4678,7 +4846,7 @@ func (b *ParseScope) transformStruct(e *types.Struct, others map[string]*Package
 			return declr, err
 		}
 
-		var fl Field
+		fl := new(Field)
 		fl.Tags = getTags(e.Tag(i))
 		fl.Type = elem
 		fl.Name = field.Name()
@@ -5037,7 +5205,7 @@ func (b *ParseScope) locateRefFromObject(parts []string, target Expr, others map
 			if fl.Name != parts[0] {
 				continue
 			}
-			return b.locateRefFromObject(parts[1:], &fl, others)
+			return b.locateRefFromObject(parts[1:], fl, others)
 		}
 		for name, fl := range item.Embeds {
 			if name != parts[0] {
@@ -5071,5 +5239,5 @@ func (b *ParseScope) locateRefFromPackage(target string, pkg string, others map[
 		return nil, errors.New("failed to find %q in %q", target, pkg)
 	}
 
-	return nil, errors.Wrap(ErrNotFound, "unable to find package %q in indexed", pkg)
+	return nil, errors.New("unable to find package %q in indexed", pkg)
 }
