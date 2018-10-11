@@ -19,7 +19,6 @@ func Transform(ctx context.Context, pkg string) (*compiler.Package, map[string]*
 // It also returns a map containing all indexed packages, else an error
 // if any occurred.
 func TransformWith(ctx context.Context, pkg string, c compiler.Cg) (*compiler.Package, map[string]*compiler.Package, error) {
-	c.ErrorCheck = func(e error) {}
 	index := compiler.NewIndexer(c)
-	return index.Load(ctx, pkg)
+	return index.Index(ctx, pkg)
 }

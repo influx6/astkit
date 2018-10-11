@@ -202,9 +202,17 @@ var (
 	}
 
 	unsafePackage = &Package{
-		Name:           "unsafe",
-		CgoPackages:    NewArchs(),
-		NormalPackages: NewArchs(),
+		Name:             "unsafe",
+		CgoPackages:      NewArch("unsafe"),
+		NormalPackages:   NewArch("unsafe"),
+		Depends:          map[string]*Package{},
+		Structs:          map[string]*Struct{},
+		Variables:        map[string]*Variable{},
+		Constants:        map[string]*Variable{},
+		Methods:          map[string]*Function{},
+		MethodByReceiver: map[string]*Function{},
+		Interfaces:       map[string]*Interface{},
+		Files:            map[string]*PackageFile{},
 		Functions: map[string]*Function{
 			"unsafe.Sizeof":   unsafeSizeOf,
 			"unsafe.Offsetof": unsafeOffset,

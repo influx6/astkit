@@ -87,7 +87,7 @@ func (l *PackageFile) HasPlatform(plat string) bool {
 	return l.Platforms[plat]
 }
 
-// HasPlatform returns true/false if giving arch is supported.
+// HasArch returns true/false if giving arch is supported.
 func (l *PackageFile) HasArch(arch string) bool {
 	return l.Archs[arch]
 }
@@ -144,8 +144,8 @@ func Platform(platform string, pkg string) *PlatformPackage {
 
 // GetConstant attempts to return Constant reference declared in Package.
 func (p *PlatformPackage) GetConstant(addr string) (*Variable, error) {
-	if method, ok := p.Constants[addr]; ok {
-		return method, nil
+	if target, ok := p.Constants[addr]; ok {
+		return target, nil
 	}
 	return nil, errors.Wrap(ErrNotFound, "Constant with addrs %q not found", addr)
 }
@@ -185,32 +185,33 @@ func (p *PlatformPackage) GetReference(ref string) (Expr, error) {
 
 // GetVariable attempts to return Variable reference declared in Package.
 func (p *PlatformPackage) GetVariable(addr string) (*Variable, error) {
-	if method, ok := p.Variables[addr]; ok {
-		return method, nil
+	if target, ok := p.Variables[addr]; ok {
+		return target, nil
 	}
+
 	return nil, errors.Wrap(ErrNotFound, "Variable with addrs %q not found", addr)
 }
 
 // GetType attempts to return Type reference declared in Package.
 func (p *PlatformPackage) GetType(addr string) (*Type, error) {
-	if method, ok := p.Types[addr]; ok {
-		return method, nil
+	if target, ok := p.Types[addr]; ok {
+		return target, nil
 	}
 	return nil, errors.Wrap(ErrNotFound, "Type with addrs %q not found", addr)
 }
 
 // GetStruct attempts to return Struct reference declared in Package.
 func (p *PlatformPackage) GetStruct(addr string) (*Struct, error) {
-	if method, ok := p.Structs[addr]; ok {
-		return method, nil
+	if target, ok := p.Structs[addr]; ok {
+		return target, nil
 	}
 	return nil, errors.Wrap(ErrNotFound, "Struct with addrs %q not found", addr)
 }
 
 // GetInterface attempts to return interface reference declared in Package.
 func (p *PlatformPackage) GetInterface(addr string) (*Interface, error) {
-	if method, ok := p.Interfaces[addr]; ok {
-		return method, nil
+	if target, ok := p.Interfaces[addr]; ok {
+		return target, nil
 	}
 	return nil, errors.Wrap(ErrNotFound, "Interface with addrs %q not found", addr)
 }
@@ -218,8 +219,8 @@ func (p *PlatformPackage) GetInterface(addr string) (*Interface, error) {
 // GetFunctionFor attempts to return Function reference for giving package function declared
 // in Package, from Package.Functions dictionary.
 func (p *PlatformPackage) GetFunctionFor(addr string) (*Function, error) {
-	if method, ok := p.Functions[addr]; ok {
-		return method, nil
+	if target, ok := p.Functions[addr]; ok {
+		return target, nil
 	}
 	return nil, errors.Wrap(ErrNotFound, "function with addrs %q not found", addr)
 }
@@ -227,8 +228,8 @@ func (p *PlatformPackage) GetFunctionFor(addr string) (*Function, error) {
 // GetMethodFor attempts to return Function reference for giving method associated
 // with type from Package.Methods dictionary.
 func (p *PlatformPackage) GetMethodFor(addr string) (*Function, error) {
-	if method, ok := p.Methods[addr]; ok {
-		return method, nil
+	if target, ok := p.Methods[addr]; ok {
+		return target, nil
 	}
 	return nil, errors.Wrap(ErrNotFound, "method with addrs %q not found", addr)
 }
@@ -278,45 +279,168 @@ func (p *PlatformPackage) addVariable(elem *Variable) error {
 	return nil
 }
 
-// Archs contains a map for PlatformPackages organized
+// Arch contains a map for PlatformPackages organized
 // for access.
-type Archs struct {
+type Arch struct {
+	Name      string
 	Archs     map[string]*PlatformPackage
 	Platforms map[string]*PlatformPackage
 }
 
-// NewArchs returns a new instance of Archs.
-func NewArchs() *Archs {
-	return &Archs{
+// NewArch returns a new instance of Arch.
+func NewArch(name string) *Arch {
+	return &Arch{
+		Name:      name,
 		Archs:     map[string]*PlatformPackage{},
 		Platforms: map[string]*PlatformPackage{},
 	}
 }
 
-// GetArch returns a new Platform package for a giving platform.
-func (p *Archs) GetPlatform(platform string, name string) *PlatformPackage {
+// GetConstant attempts to return Constant reference declared in Package.
+// *arch argument can be used to specify a architecture or platform grouping.
+func (p *Arch) GetConstant(targetName string, arch string) (*Variable, error) {
+	points := []string{p.Name, targetName}
+	addr := strings.Join(points, ".")
+
+	if targetMap, ok := p.Archs[arch]; ok {
+		return targetMap.GetConstant(addr)
+	}
+
+	if targetMap, ok := p.Platforms[arch]; ok {
+		return targetMap.GetConstant(addr)
+	}
+
+	return nil, ErrNotFound
+}
+
+// GetVariable attempts to return Variable reference declared in Package.
+// *arch argument can be used to specify a architecture or platform grouping.
+func (p *Arch) GetVariable(targetName string, arch string) (*Variable, error) {
+	points := []string{p.Name, targetName}
+	addr := strings.Join(points, ".")
+
+	if targetMap, ok := p.Archs[arch]; ok {
+		return targetMap.GetConstant(addr)
+	}
+
+	if targetMap, ok := p.Platforms[arch]; ok {
+		return targetMap.GetConstant(addr)
+	}
+
+	return nil, ErrNotFound
+}
+
+// GetType attempts to return Type reference declared in Package.
+// *arch argument can be used to specify a architecture or platform grouping.
+func (p *Arch) GetType(targetName string, arch string) (*Type, error) {
+	points := []string{p.Name, targetName}
+	addr := strings.Join(points, ".")
+
+	if targetMap, ok := p.Archs[arch]; ok {
+		return targetMap.GetType(addr)
+	}
+
+	if targetMap, ok := p.Platforms[arch]; ok {
+		return targetMap.GetType(addr)
+	}
+
+	return nil, ErrNotFound
+}
+
+// GetStruct attempts to return Struct reference declared in Package.
+// *arch argument can be used to specify a architecture or platform grouping.
+func (p *Arch) GetStruct(targetName string, arch string) (*Struct, error) {
+	points := []string{p.Name, targetName}
+	addr := strings.Join(points, ".")
+
+	if targetMap, ok := p.Archs[arch]; ok {
+		return targetMap.GetStruct(addr)
+	}
+
+	if targetMap, ok := p.Platforms[arch]; ok {
+		return targetMap.GetStruct(addr)
+	}
+
+	return nil, ErrNotFound
+}
+
+// GetInterface attempts to return interface reference declared in Package.
+// *arch argument can be used to specify a architecture or platform grouping.
+func (p *Arch) GetInterface(targetName string, arch string) (*Interface, error) {
+	points := []string{p.Name, targetName}
+	addr := strings.Join(points, ".")
+
+	if targetMap, ok := p.Archs[arch]; ok {
+		return targetMap.GetInterface(addr)
+	}
+
+	if targetMap, ok := p.Platforms[arch]; ok {
+		return targetMap.GetInterface(addr)
+	}
+
+	return nil, ErrNotFound
+}
+
+// GetFunctionFor attempts to return Function reference for giving package function declared
+// in Package, from Package.Functions dictionary.
+// *arch argument can be used to specify a architecture or platform grouping.
+func (p *Arch) GetFunctionFor(targetName string, arch string) (*Function, error) {
+	points := []string{p.Name, targetName}
+	addr := strings.Join(points, ".")
+
+	if targetMap, ok := p.Archs[arch]; ok {
+		return targetMap.GetFunctionFor(addr)
+	}
+
+	if targetMap, ok := p.Platforms[arch]; ok {
+		return targetMap.GetFunctionFor(addr)
+	}
+
+	return nil, ErrNotFound
+}
+
+// GetMethodFor attempts to return Function reference for giving method associated
+// with type from Package.Methods dictionary.
+// *arch argument can be used to specify a architecture or platform grouping.
+func (p *Arch) GetMethodFor(typeName string, targetName string, arch string) (*Function, error) {
+	points := []string{p.Name, targetName}
+	addr := strings.Join(points, ".")
+
+	if targetMap, ok := p.Archs[arch]; ok {
+		return targetMap.GetMethodFor(addr)
+	}
+
+	if targetMap, ok := p.Platforms[arch]; ok {
+		return targetMap.GetMethodFor(addr)
+	}
+
+	return nil, ErrNotFound
+}
+
+// GetPlatform returns a new Platform package for a giving platform.
+func (p *Arch) GetPlatform(platform string) *PlatformPackage {
 	if archPackage, ok := p.Archs[platform]; ok {
 		return archPackage
 	}
 
-	platfm := Platform(platform, name)
+	platfm := Platform(platform, p.Name)
 	p.Platforms[platform] = platfm
 	return platfm
 }
 
 // GetArch returns a new Platform package for a giving architecture.
-func (p *Archs) GetArch(arch string, name string) *PlatformPackage {
+func (p *Arch) GetArch(arch string) *PlatformPackage {
 	if archPackage, ok := p.Archs[arch]; ok {
 		return archPackage
 	}
-	platfm := Platform(arch, name)
+	platfm := Platform(arch, p.Name)
 	p.Archs[arch] = platfm
 	return platfm
 }
 
-// GetReferenceArchs returns giving Expr which matches giving reference for a set of architectures.
+// GetReferenceByArch returns giving Expr which matches giving reference for a set of architectures.
 // If non is found, then we check the platforms else return ErrNotFound.
-func (p *Archs) GetReferenceByArchs(ref string, archs map[string]bool) (Expr, error) {
+func (p *Arch) GetReferenceByArch(ref string, archs map[string]bool) (Expr, error) {
 	for k := range archs {
 		if plat, ok := p.Archs[k]; ok {
 			if pm, err := plat.GetReference(ref); err == nil {
@@ -336,7 +460,7 @@ func (p *Archs) GetReferenceByArchs(ref string, archs map[string]bool) (Expr, er
 
 // GetReference returns giving Expr which matches giving reference.
 // If non is found, then we check the platforms else return ErrNotFound.
-func (p *Archs) GetReference(ref string) (Expr, error) {
+func (p *Arch) GetReference(ref string) (Expr, error) {
 	for _, pkg := range p.Archs {
 		if pm, err := pkg.GetReference(ref); err == nil {
 			return pm, nil
@@ -359,19 +483,19 @@ type Package struct {
 	Name      string
 	Docs      []Doc
 	BadDeclrs []*BadExpr
-	Depends   []*Package
 
 	// CgoPackages holds architecture and platform specific types
 	// and declarations for cgo based types.
-	CgoPackages *Archs
+	CgoPackages *Arch
 
 	// NormalPackages holds architecture and platform specific types
 	// and declarations for non-cgo based types.
-	NormalPackages *Archs
+	NormalPackages *Arch
 
 	// All architecture allowed types and variables.
 	Blanks           []*Variable
 	NoNameStructs    []*Struct
+	Depends          map[string]*Package
 	Variables        map[string]*Variable
 	Constants        map[string]*Variable
 	Types            map[string]*Type
@@ -397,74 +521,140 @@ type Package struct {
 }
 
 // GetConstant attempts to return Constant reference declared in Package.
-func (p *Package) GetConstant(methodName string) (*Variable, error) {
-	points := []string{p.Name, methodName}
-	addr := strings.Join(points, ".")
-	if method, ok := p.Constants[addr]; ok {
-		return method, nil
+// *arch argument can be used to specify a architecture or platform grouping.
+func (p *Package) GetConstant(targetName string, arch string) (*Variable, error) {
+	if arch != "" {
+		if target, err := p.NormalPackages.GetConstant(targetName, arch); err == nil {
+			return target, nil
+		}
+
+		if target, err := p.CgoPackages.GetConstant(targetName, arch); err == nil {
+			return target, nil
+		}
 	}
 
+	points := []string{p.Name, targetName}
+	addr := strings.Join(points, ".")
+	if target, ok := p.Constants[addr]; ok {
+		return target, nil
+	}
 	return nil, errors.Wrap(ErrNotFound, "Constant with addrs %q not found", addr)
 }
 
 // GetVariable attempts to return Variable reference declared in Package.
-func (p *Package) GetVariable(methodName string) (*Variable, error) {
-	points := []string{p.Name, methodName}
+func (p *Package) GetVariable(targetName string, arch string) (*Variable, error) {
+	if arch != "" {
+		if target, err := p.NormalPackages.GetVariable(targetName, arch); err == nil {
+			return target, nil
+		}
+
+		if target, err := p.CgoPackages.GetVariable(targetName, arch); err == nil {
+			return target, nil
+		}
+	}
+
+	points := []string{p.Name, targetName}
 	addr := strings.Join(points, ".")
-	if method, ok := p.Variables[addr]; ok {
-		return method, nil
+	if target, ok := p.Variables[addr]; ok {
+		return target, nil
 	}
 	return nil, errors.Wrap(ErrNotFound, "Variable with addrs %q not found", addr)
 }
 
 // GetType attempts to return Type reference declared in Package.
-func (p *Package) GetType(methodName string) (*Type, error) {
-	points := []string{p.Name, methodName}
+func (p *Package) GetType(targetName string, arch string) (*Type, error) {
+	if arch != "" {
+		if target, err := p.NormalPackages.GetType(targetName, arch); err == nil {
+			return target, nil
+		}
+
+		if target, err := p.CgoPackages.GetType(targetName, arch); err == nil {
+			return target, nil
+		}
+	}
+	points := []string{p.Name, targetName}
 	addr := strings.Join(points, ".")
-	if method, ok := p.Types[addr]; ok {
-		return method, nil
+	if target, ok := p.Types[addr]; ok {
+		return target, nil
 	}
 	return nil, errors.Wrap(ErrNotFound, "Type with addrs %q not found", addr)
 }
 
 // GetStruct attempts to return Struct reference declared in Package.
-func (p *Package) GetStruct(methodName string) (*Struct, error) {
-	points := []string{p.Name, methodName}
+func (p *Package) GetStruct(targetName string, arch string) (*Struct, error) {
+	if arch != "" {
+		if target, err := p.NormalPackages.GetStruct(targetName, arch); err == nil {
+			return target, nil
+		}
+
+		if target, err := p.CgoPackages.GetStruct(targetName, arch); err == nil {
+			return target, nil
+		}
+	}
+	points := []string{p.Name, targetName}
 	addr := strings.Join(points, ".")
-	if method, ok := p.Structs[addr]; ok {
-		return method, nil
+	if target, ok := p.Structs[addr]; ok {
+		return target, nil
 	}
 	return nil, errors.Wrap(ErrNotFound, "Struct with addrs %q not found", addr)
 }
 
 // GetInterface attempts to return interface reference declared in Package.
-func (p *Package) GetInterface(methodName string) (*Interface, error) {
-	points := []string{p.Name, methodName}
+func (p *Package) GetInterface(targetName string, arch string) (*Interface, error) {
+	if arch != "" {
+		if target, err := p.NormalPackages.GetInterface(targetName, arch); err == nil {
+			return target, nil
+		}
+
+		if target, err := p.CgoPackages.GetInterface(targetName, arch); err == nil {
+			return target, nil
+		}
+	}
+	points := []string{p.Name, targetName}
 	addr := strings.Join(points, ".")
-	if method, ok := p.Interfaces[addr]; ok {
-		return method, nil
+	if target, ok := p.Interfaces[addr]; ok {
+		return target, nil
 	}
 	return nil, errors.Wrap(ErrNotFound, "Interface with addrs %q not found", addr)
 }
 
 // GetFunctionFor attempts to return Function reference for giving package function declared
 // in Package, from Package.Functions dictionary.
-func (p *Package) GetFunctionFor(methodName string) (*Function, error) {
-	points := []string{p.Name, methodName}
+func (p *Package) GetFunctionFor(targetName string, arch string) (*Function, error) {
+	if arch != "" {
+		if target, err := p.NormalPackages.GetFunctionFor(targetName, arch); err == nil {
+			return target, nil
+		}
+
+		if target, err := p.CgoPackages.GetFunctionFor(targetName, arch); err == nil {
+			return target, nil
+		}
+	}
+	points := []string{p.Name, targetName}
 	addr := strings.Join(points, ".")
-	if method, ok := p.Functions[addr]; ok {
-		return method, nil
+	if target, ok := p.Functions[addr]; ok {
+		return target, nil
 	}
 	return nil, errors.Wrap(ErrNotFound, "function with addrs %q not found", addr)
 }
 
 // GetMethodFor attempts to return Function reference for giving method associated
 // with type from Package.Methods dictionary.
-func (p *Package) GetMethodFor(typeName string, methodName string) (*Function, error) {
-	points := []string{p.Name, typeName, methodName}
+func (p *Package) GetMethodFor(typeName string, targetName string, arch string) (*Function, error) {
+	if arch != "" {
+		if target, err := p.NormalPackages.GetMethodFor(typeName, targetName, arch); err == nil {
+			return target, nil
+		}
+
+		if target, err := p.CgoPackages.GetMethodFor(typeName, targetName, arch); err == nil {
+			return target, nil
+		}
+	}
+
+	points := []string{p.Name, typeName, targetName}
 	addr := strings.Join(points, ".")
-	if method, ok := p.Methods[addr]; ok {
-		return method, nil
+	if target, ok := p.Methods[addr]; ok {
+		return target, nil
 	}
 	return nil, errors.Wrap(ErrNotFound, "method with addrs %q not found", addr)
 }
@@ -473,46 +663,70 @@ func (p *Package) GetMethodFor(typeName string, methodName string) (*Function, e
 func (p *Package) GetReferenceByArchs(ref string, archs map[string]bool, cgo bool) (Expr, error) {
 	for k := range archs {
 		if cgo {
-			if pm, err := p.CgoPackages.GetArch(k, p.Name).GetReference(ref); err == nil {
+			if pm, err := p.CgoPackages.GetArch(k).GetReference(ref); err == nil {
 				return pm, nil
 			}
 			continue
 		}
 
-		if pm, err := p.NormalPackages.GetArch(k, p.Name).GetReference(ref); err == nil {
+		if pm, err := p.NormalPackages.GetArch(k).GetReference(ref); err == nil {
 			return pm, nil
 		}
 	}
-
 	return p.GetReference(ref)
 }
 
 // GetReferenceByArch returns a giving reference by targeting by platform.
 func (p *Package) GetReferenceByArch(ref string, arch string, cgo bool) (Expr, error) {
 	if cgo {
-		if pm, err := p.CgoPackages.GetArch(arch, p.Name).GetReference(ref); err == nil {
+		if pm, err := p.CgoPackages.GetArch(arch).GetReference(ref); err == nil {
 			return pm, nil
 		}
 	}
-
-	if pm, err := p.NormalPackages.GetArch(arch, p.Name).GetReference(ref); err == nil {
+	if pm, err := p.NormalPackages.GetArch(arch).GetReference(ref); err == nil {
 		return pm, nil
 	}
-
 	return p.GetReference(ref)
 }
 
 // GetReferenceByPlatform returns a giving reference by targeting by platform.
 func (p *Package) GetReferenceByPlatform(ref string, platform string, cgo bool) (Expr, error) {
 	if cgo {
-		if pm, err := p.CgoPackages.GetPlatform(platform, p.Name).GetReference(ref); err == nil {
+		if pm, err := p.CgoPackages.GetPlatform(platform).GetReference(ref); err == nil {
 			return pm, nil
 		}
 	}
-	if pm, err := p.NormalPackages.GetPlatform(platform, p.Name).GetReference(ref); err == nil {
+	if pm, err := p.NormalPackages.GetPlatform(platform).GetReference(ref); err == nil {
 		return pm, nil
 	}
 	return p.GetReference(ref)
+}
+
+// GetAnyTypeFromArchs will attempt to retrieve giving type from map any of provided architecture.
+func (p *Package) GetAnyTypeFromArchs(targetName string, archs map[string]bool, cgo bool) (Expr, error) {
+	points := []string{p.Name, targetName}
+	ref := strings.Join(points, ".")
+	for k := range archs {
+		if cgo {
+			if pm, err := p.CgoPackages.GetArch(k).GetReference(ref); err == nil {
+				return pm, nil
+			}
+			continue
+		}
+
+		if pm, err := p.NormalPackages.GetArch(k).GetReference(ref); err == nil {
+			return pm, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+
+// GetAnyType will attempt to retrieve giving type from package regardless of type, architecture
+// and platform. It returns the first found.
+func (p *Package) GetAnyType(targetName string) (Expr, error) {
+	points := []string{p.Name, targetName}
+	addr := strings.Join(points, ".")
+	return p.GetReference(addr)
 }
 
 // GetReference returns giving Expr which matches giving reference.
@@ -564,7 +778,7 @@ func (p *Package) Add(obj interface{}) error {
 		p.Docs = append(p.Docs, elem)
 		return nil
 	case *Package:
-		p.Depends = append(p.Depends, elem)
+		p.Depends[elem.Name] = elem
 		return nil
 	case *Type:
 		return p.addType(elem)
@@ -635,7 +849,9 @@ func (p *Package) addFunction(elem *Function) error {
 	// architecture map.
 	if elem.IsArchSpecific() && elem.IsCgoSpecific() {
 		for k := range elem.Archs {
-			p.CgoPackages.GetArch(k, p.Name).addFunction(elem)
+			if err := p.CgoPackages.GetArch(k).addFunction(elem); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -644,7 +860,9 @@ func (p *Package) addFunction(elem *Function) error {
 	// architecture map.
 	if elem.IsArchSpecific() && !elem.IsCgoSpecific() {
 		for k := range elem.Archs {
-			p.NormalPackages.GetArch(k, p.Name).addFunction(elem)
+			if err := p.NormalPackages.GetArch(k).addFunction(elem); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -653,7 +871,9 @@ func (p *Package) addFunction(elem *Function) error {
 	// architecture map.
 	if elem.IsPlatformSpecific() && elem.IsCgoSpecific() {
 		for k := range elem.Platforms {
-			p.CgoPackages.GetPlatform(k, p.Name).addFunction(elem)
+			if err := p.CgoPackages.GetPlatform(k).addFunction(elem); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -662,7 +882,9 @@ func (p *Package) addFunction(elem *Function) error {
 	// architecture map.
 	if elem.IsPlatformSpecific() && !elem.IsCgoSpecific() {
 		for k := range elem.Platforms {
-			p.NormalPackages.GetPlatform(k, p.Name).addFunction(elem)
+			if err := p.NormalPackages.GetPlatform(k).addFunction(elem); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -689,7 +911,9 @@ func (p *Package) addType(elem *Type) error {
 	// architecture map.
 	if elem.IsArchSpecific() && elem.IsCgoSpecific() {
 		for k := range elem.Archs {
-			p.CgoPackages.GetArch(k, p.Name).addType(elem)
+			if err := p.CgoPackages.GetArch(k).addType(elem); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -698,7 +922,9 @@ func (p *Package) addType(elem *Type) error {
 	// architecture map.
 	if elem.IsArchSpecific() && !elem.IsCgoSpecific() {
 		for k := range elem.Archs {
-			p.NormalPackages.GetArch(k, p.Name).addType(elem)
+			if err := p.NormalPackages.GetArch(k).addType(elem); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -707,7 +933,9 @@ func (p *Package) addType(elem *Type) error {
 	// architecture map.
 	if elem.IsPlatformSpecific() && elem.IsCgoSpecific() {
 		for k := range elem.Platforms {
-			p.CgoPackages.GetPlatform(k, p.Name).addType(elem)
+			if err := p.CgoPackages.GetPlatform(k).addType(elem); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -716,7 +944,9 @@ func (p *Package) addType(elem *Type) error {
 	// architecture map.
 	if elem.IsPlatformSpecific() && !elem.IsCgoSpecific() {
 		for k := range elem.Platforms {
-			p.NormalPackages.GetPlatform(k, p.Name).addType(elem)
+			if err := p.NormalPackages.GetPlatform(k).addType(elem); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -732,7 +962,9 @@ func (p *Package) addStruct(elem *Struct) error {
 	// architecture map.
 	if elem.IsArchSpecific() && elem.IsCgoSpecific() {
 		for k := range elem.Archs {
-			p.CgoPackages.GetArch(k, p.Name).addStruct(elem)
+			if err := p.CgoPackages.GetArch(k).addStruct(elem); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -741,7 +973,9 @@ func (p *Package) addStruct(elem *Struct) error {
 	// architecture map.
 	if elem.IsArchSpecific() && !elem.IsCgoSpecific() {
 		for k := range elem.Archs {
-			p.NormalPackages.GetArch(k, p.Name).addStruct(elem)
+			if err := p.NormalPackages.GetArch(k).addStruct(elem); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -750,7 +984,9 @@ func (p *Package) addStruct(elem *Struct) error {
 	// architecture map.
 	if elem.IsPlatformSpecific() && elem.IsCgoSpecific() {
 		for k := range elem.Platforms {
-			p.CgoPackages.GetPlatform(k, p.Name).addStruct(elem)
+			if err := p.CgoPackages.GetPlatform(k).addStruct(elem); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -759,7 +995,9 @@ func (p *Package) addStruct(elem *Struct) error {
 	// architecture map.
 	if elem.IsPlatformSpecific() && !elem.IsCgoSpecific() {
 		for k := range elem.Platforms {
-			p.NormalPackages.GetPlatform(k, p.Name).addStruct(elem)
+			if err := p.NormalPackages.GetPlatform(k).addStruct(elem); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -780,7 +1018,9 @@ func (p *Package) addInterface(elem *Interface) error {
 	// architecture map.
 	if elem.IsArchSpecific() && elem.IsCgoSpecific() {
 		for k := range elem.Archs {
-			p.CgoPackages.GetArch(k, p.Name).addInterface(elem)
+			if err := p.CgoPackages.GetArch(k).addInterface(elem); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -789,7 +1029,9 @@ func (p *Package) addInterface(elem *Interface) error {
 	// architecture map.
 	if elem.IsArchSpecific() && !elem.IsCgoSpecific() {
 		for k := range elem.Archs {
-			p.NormalPackages.GetArch(k, p.Name).addInterface(elem)
+			if err := p.NormalPackages.GetArch(k).addInterface(elem); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -798,7 +1040,9 @@ func (p *Package) addInterface(elem *Interface) error {
 	// architecture map.
 	if elem.IsPlatformSpecific() && elem.IsCgoSpecific() {
 		for k := range elem.Platforms {
-			p.CgoPackages.GetPlatform(k, p.Name).addInterface(elem)
+			if err := p.CgoPackages.GetPlatform(k).addInterface(elem); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -807,7 +1051,9 @@ func (p *Package) addInterface(elem *Interface) error {
 	// architecture map.
 	if elem.IsPlatformSpecific() && !elem.IsCgoSpecific() {
 		for k := range elem.Platforms {
-			p.NormalPackages.GetPlatform(k, p.Name).addInterface(elem)
+			if err := p.NormalPackages.GetPlatform(k).addInterface(elem); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -828,7 +1074,9 @@ func (p *Package) addVariable(elem *Variable) error {
 	// architecture map.
 	if elem.IsArchSpecific() && elem.IsCgoSpecific() {
 		for k := range elem.Archs {
-			p.CgoPackages.GetArch(k, p.Name).addVariable(elem)
+			if err := p.CgoPackages.GetArch(k).addVariable(elem); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -837,7 +1085,9 @@ func (p *Package) addVariable(elem *Variable) error {
 	// architecture map.
 	if elem.IsArchSpecific() && !elem.IsCgoSpecific() {
 		for k := range elem.Archs {
-			p.NormalPackages.GetArch(k, p.Name).addVariable(elem)
+			if err := p.NormalPackages.GetArch(k).addVariable(elem); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -846,7 +1096,9 @@ func (p *Package) addVariable(elem *Variable) error {
 	// architecture map.
 	if elem.IsPlatformSpecific() && elem.IsCgoSpecific() {
 		for k := range elem.Platforms {
-			p.CgoPackages.GetPlatform(k, p.Name).addVariable(elem)
+			if err := p.CgoPackages.GetPlatform(k).addVariable(elem); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -855,7 +1107,9 @@ func (p *Package) addVariable(elem *Variable) error {
 	// architecture map.
 	if elem.IsPlatformSpecific() && !elem.IsCgoSpecific() {
 		for k := range elem.Platforms {
-			p.NormalPackages.GetPlatform(k, p.Name).addVariable(elem)
+			if err := p.NormalPackages.GetPlatform(k).addVariable(elem); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
@@ -896,7 +1150,7 @@ func (l *Location) HasPlatform(plat string) bool {
 	return l.Platforms[plat]
 }
 
-// HasPlatform returns true/false if giving arch is supported.
+// HasArch returns true/false if giving arch is supported.
 func (l *Location) HasArch(arch string) bool {
 	return l.Archs[arch]
 }
@@ -1215,13 +1469,62 @@ func (p *AssignExpr) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
+// IndexedProperty represents giving property retrieved from a indexed expression.
+type IndexedProperty struct {
+	Index    *IndexExpr
+	Property Expr
+}
+
+// ID implements Expr.
+func (p IndexedProperty) ID() string {
+	return "IndexedProperty"
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p IndexedProperty) Expr() string {
+	return ""
+}
+
+// Resolve implements Resolvable interface.
+func (p *IndexedProperty) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// SliceExpr represents giving Call expression.
+type SliceExpr struct {
+	Commentaries
+	Location
+
+	Target  Expr
+	Max     Expr
+	Lowest  Expr
+	Highest Expr
+}
+
+// ID implements Expr.
+func (p SliceExpr) ID() string {
+	return "SliceExpr"
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p SliceExpr) Expr() string {
+	return ""
+}
+
+// Resolve implements Resolvable interface.
+func (p *SliceExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
 // IndexExpr represents giving Call expression.
 type IndexExpr struct {
 	Commentaries
 	Location
 
 	Elem  Expr
-	Index string
+	Index Expr
 }
 
 // ID implements Expr.
@@ -1575,6 +1878,8 @@ func (p *ForExpr) Resolve(indexed map[string]*Package) error {
 // UnknownExpr represents giving Range expression.
 type UnknownExpr struct {
 	Location
+	Error error
+	File  *PackageFile
 }
 
 // Expr returns rendered string representation of giving type.
@@ -1703,6 +2008,58 @@ func (p PropertyGetExpr) ID() string {
 
 // Resolve implements Resolvable interface.
 func (p *PropertyGetExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// SelectCaseExpr represents giving char expression like Bracket, + , -
+// SelectCases used in code.
+type SelectCaseExpr struct {
+	Commentaries
+	Location
+
+	Comm Expr
+	Body []Expr
+}
+
+// ID implements Expr.
+func (p SelectCaseExpr) ID() string {
+	return "SelectCaseExpr"
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p SelectCaseExpr) Expr() string {
+	return ""
+}
+
+// Resolve implements Resolvable interface.
+func (p *SelectCaseExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// SwitchCaseExpr represents giving char expression like Bracket, + , -
+// SwitchCases used in code.
+type SwitchCaseExpr struct {
+	Commentaries
+	Location
+
+	Conditions []Expr
+	Body       []Expr
+}
+
+// ID implements Expr.
+func (p SwitchCaseExpr) ID() string {
+	return "SwitchCaseExpr"
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p SwitchCaseExpr) Expr() string {
+	return ""
+}
+
+// Resolve implements Resolvable interface.
+func (p *SwitchCaseExpr) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
@@ -2359,7 +2716,7 @@ func (p *Pointer) SetID(n string) {
 
 // ID implements the Expr interface.
 func (p Pointer) ID() string {
-	return "*" + p.Elem.ID()
+	return p.Elem.ID()
 }
 
 // Resolve takes the list of indexed packages to internal structures
@@ -2990,5 +3347,7 @@ func (p *Function) Resolve(indexed map[string]*Package) error {
 
 // FunctionScope embodies all declared types found within a function body.
 type FunctionScope struct {
+	Name  string
+	Path  string
 	Scope map[string]Expr
 }

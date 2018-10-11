@@ -3,14 +3,14 @@ package compiler
 import (
 	"go/ast"
 	"go/build"
-
 	"go/parser"
+	"runtime"
 
 	"path/filepath"
 
 	"os"
 
-	"github.com/gokit/astkit/internal/runtime"
+	internalRuntime "github.com/gokit/astkit/internal/runtime"
 	"github.com/gokit/errors"
 	"golang.org/x/tools/go/loader"
 )
@@ -41,6 +41,21 @@ type Cg struct {
 	// GoRuntime sets the GOROOT path to be used to indicate
 	// the location of the Go runtime source.
 	GoRuntime string
+
+	// GoArch sets the golang supported architecture which will be used in generating
+	// build and structure data.
+	GoArch string
+
+	// GOOS sets the golang supported platform which will be used in generating
+	// build and structure data.
+	GOOS string
+
+	// ExtraArchs is a map expected to be used to indicate processing of more
+	// golang supported platforms and a slice of architectures those platforms
+	// should be processed for. It is distinct from the Cg.GoAech and Cg.GOOS
+	// fields as it indicates you wish to add this platform structures into
+	// built data. It comes will added time cost.
+	ExtraArchs map[string][]string
 
 	// PackgeDir sets the absolute path to be used for resolving
 	// relative path names by the loader.Config. It is used to
@@ -84,12 +99,29 @@ type Cg struct {
 	// ErrorCheck sets the function to be provided to the type checker.
 	ErrorCheck func(error)
 
+	// PlatformError sets the function to be called with provided error
+	// received in attempt to process a giving combination of a platform
+	// and architecture.
+	PlatformError func(err error, arch string, goos string)
+
 	// AfterTypeCheck provides a hook to listen for latest files added after
 	// parser has finished type checking for a giving package.
 	AfterTypeCheck func(info *loader.PackageInfo, files []*ast.File)
 }
 
 func (cg *Cg) init() error {
+	if cg.GoArch == "" {
+		cg.GoArch = runtime.GOARCH
+	}
+	if cg.GOOS == "" {
+		cg.GOOS = runtime.GOOS
+	}
+	if cg.PlatformError == nil {
+		cg.PlatformError = func(_ error, _ string, _ string) {}
+	}
+	if cg.ErrorCheck == nil {
+		cg.ErrorCheck = func(_ error) {}
+	}
 	if cg.PackageDir == "" {
 		dir, err := os.Getwd()
 		if err != nil {
@@ -98,10 +130,10 @@ func (cg *Cg) init() error {
 		cg.PackageDir = dir
 	}
 	if cg.GoPath == "" {
-		cg.GoPath = runtime.GoPath()
+		cg.GoPath = internalRuntime.GoPath()
 	}
 	if cg.GoRuntime == "" {
-		cg.GoRuntime = runtime.RootPath()
+		cg.GoRuntime = internalRuntime.RootPath()
 	}
 	return nil
 }
@@ -119,7 +151,7 @@ func (cg Cg) Import(ctxt *build.Context, importPath, fromDir string, mode build.
 // Load takes a giving package path which it parses
 // returning a structure containing all related filesets
 // and parsed AST.
-func Load(c Cg, pkg string, arch string, goos string) (*loader.Program, error) {
+func Load(c *Cg, pkg string, arch string, goos string) (*loader.Program, error) {
 	if err := c.init(); err != nil {
 		return nil, err
 	}
@@ -128,14 +160,15 @@ func Load(c Cg, pkg string, arch string, goos string) (*loader.Program, error) {
 		return nil, errors.New("arch must be supplied")
 	}
 
+	if goos == "" {
+		return nil, errors.New("goos must be supplied")
+	}
+
 	mybuild := build.Default
+	mybuild.GOOS = goos
 	mybuild.GOARCH = arch
 	mybuild.GOPATH = c.GoPath
 	mybuild.GOROOT = c.GoRuntime
-
-	if goos != "" {
-		mybuild.GOOS = goos
-	}
 
 	var lconfig loader.Config
 	lconfig.Build = &mybuild
@@ -149,7 +182,7 @@ func Load(c Cg, pkg string, arch string, goos string) (*loader.Program, error) {
 	// Add internal packages that should be loaded
 	// by default from config.
 	for _, elem := range c.Internals {
-		if !runtime.PathExist(runtime.FromRuntime(elem)) {
+		if !internalRuntime.PathExist(internalRuntime.FromRuntime(elem)) {
 			continue
 		}
 		lconfig.Import(elem)
@@ -158,7 +191,7 @@ func Load(c Cg, pkg string, arch string, goos string) (*loader.Program, error) {
 	// Add attached packages ensuring they lie within
 	// Cg.GoPath if absolute paths.
 	for _, elem := range c.Imports {
-		if !filepath.IsAbs(elem) && runtime.PathExist(runtime.FromGoPath(elem)) {
+		if !filepath.IsAbs(elem) && internalRuntime.PathExist(internalRuntime.FromGoPath(elem)) {
 			if c.WithTests {
 				lconfig.ImportWithTests(elem)
 				continue
@@ -168,7 +201,7 @@ func Load(c Cg, pkg string, arch string, goos string) (*loader.Program, error) {
 			continue
 		}
 
-		if rel, err := runtime.WithinToGoPath(elem); err == nil {
+		if rel, err := internalRuntime.WithinToGoPath(elem); err == nil {
 			if c.WithTests {
 				lconfig.ImportWithTests(rel)
 				continue

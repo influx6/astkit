@@ -1,13 +1,11 @@
 package compiler
 
 import (
-	"fmt"
 	"go/ast"
 	"go/token"
 	"go/types"
 	"log"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 
@@ -37,7 +35,7 @@ const (
 // a loader.Program returning a Package containing all
 // definitions.
 type Indexer struct {
-	C Cg
+	C *Cg
 
 	waiter  sync.WaitGroup
 	arw     sync.RWMutex
@@ -47,26 +45,33 @@ type Indexer struct {
 // NewIndexer returns a new instance of an Indexer.
 func NewIndexer(c Cg) *Indexer {
 	return &Indexer{
-		C:       c,
+		C:       &c,
 		indexed: map[string]*Package{},
 	}
 }
 
-func (indexer *Indexer) Load(ctx context.Context, pkg string) (*Package, map[string]*Package, error) {
-	myGOOS, myArch := runtime.GOOS, runtime.GOARCH
-	pkgd, err := indexer.Index(ctx, pkg, myArch, myGOOS)
+// Load is the central function used for processing a giving package with current architecture, platform
+// configuration and other desired achitectures.
+func (indexer *Indexer) Index(ctx context.Context, pkg string) (*Package, map[string]*Package, error) {
+	if err := indexer.C.init(); err != nil {
+		return nil, nil, err
+	}
+
+	pkgd, err := indexer.indexArchAndPlatform(ctx, pkg, indexer.C.GoArch, indexer.C.GOOS)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	for _, platform := range basicPlatformLists {
-		for _, arch := range basicArchLists {
-			if myArch == arch && platform == myGOOS {
+	for platform, archs := range indexer.C.ExtraArchs {
+		for _, arch := range archs {
+			if arch == indexer.C.GoArch && platform == indexer.C.GOOS {
 				continue
 			}
 
-			if _, err := indexer.Index(ctx, pkg, arch, platform); err != nil {
-				indexer.C.ErrorCheck(err)
+			if _, err := indexer.indexArchAndPlatform(ctx, pkg, arch, platform); err != nil {
+				if indexer.C.PlatformError != nil {
+					indexer.C.PlatformError(err, arch, platform)
+				}
 			}
 		}
 	}
@@ -83,7 +88,7 @@ func (indexer *Indexer) Load(ctx context.Context, pkg string) (*Package, map[str
 	return pkgd, indexed, nil
 }
 
-// Index takes provided loader.Program returning a Package containing
+// indexArchAndPlatform takes provided loader.Program returning a Package containing
 // parsed structures, types and declarations of all packages.
 // It takes the basePkg path as the starting point of indexing, where the
 // Package instance return is the basePkg retrieved from the program.
@@ -95,7 +100,7 @@ func (indexer *Indexer) Load(ctx context.Context, pkg string) (*Package, map[str
 // all imports and structures will be processed and returned as a Package
 // instance pointer. In case of an error occurring, an incomplete
 // package instance pointer and error will be returned.
-func (indexer *Indexer) Index(ctx context.Context, basePackage string, arch string, goos string) (*Package, error) {
+func (indexer *Indexer) indexArchAndPlatform(ctx context.Context, basePackage string, arch string, goos string) (*Package, error) {
 	program, err := Load(indexer.C, basePackage, arch, goos)
 	if err != nil {
 		return nil, err
@@ -118,9 +123,10 @@ func (indexer *Indexer) indexPackage(ctx context.Context, program *loader.Progra
 		pkg = prevPackage
 	} else {
 		pkg = &Package{
-			CgoPackages:      NewArchs(),
-			NormalPackages:   NewArchs(),
 			Name:             targetPackage,
+			CgoPackages:      NewArch(targetPackage),
+			NormalPackages:   NewArch(targetPackage),
+			Depends:          map[string]*Package{},
 			Types:            map[string]*Type{},
 			Structs:          map[string]*Struct{},
 			Variables:        map[string]*Variable{},
@@ -139,7 +145,7 @@ func (indexer *Indexer) indexPackage(ctx context.Context, program *loader.Progra
 		return nil, errors.New("Package %q data not available", targetPackage)
 	}
 
-	if err := indexer.index(ctx, program, pkg, info); err != nil {
+	if err := indexer.indexProgram(ctx, program, pkg, info); err != nil {
 		return pkg, err
 	}
 
@@ -148,7 +154,7 @@ func (indexer *Indexer) indexPackage(ctx context.Context, program *loader.Progra
 
 // index runs logic on a per package basis handling all commentaries, type declarations which
 // which be processed and added into provided package reference.
-func (indexer *Indexer) index(ctx context.Context, program *loader.Program, pkg *Package, p *loader.PackageInfo) error {
+func (indexer *Indexer) indexProgram(ctx context.Context, program *loader.Program, pkg *Package, p *loader.PackageInfo) error {
 	in := make(chan interface{}, 0)
 	w, ctx := errgroup.WithContext(ctx)
 
@@ -219,6 +225,7 @@ func (indexer *Indexer) indexFile(ctx context.Context, eg *errgroup.Group, in ch
 	scope.Package = pkgFile
 	scope.Program = program
 	scope.scopes = map[string]FunctionScope{}
+	scope.parentScopes = map[string]FunctionScope{}
 
 	// if file has an associated package-level documentation,
 	// parse it and add to package documentation.
@@ -287,6 +294,7 @@ type ParseScope struct {
 	Program       *loader.Program
 	Info          *loader.PackageInfo
 	scopes        map[string]FunctionScope
+	parentScopes  map[string]FunctionScope
 	comments      map[*ast.CommentGroup]struct{}
 }
 
@@ -886,6 +894,10 @@ func (b *ParseScope) transformFunctionSpec(fn *ast.FuncDecl) (*Function, error) 
 	declr.Name = fn.Name.Name
 	declr.ScopeName = fn.Name.Name
 
+	if declr.Name == "" {
+		declr.Name = String(10)
+	}
+
 	if fn.Doc != nil {
 		b.comments[fn.Doc] = struct{}{}
 		doc, err := b.handleCommentGroup(fn.Doc)
@@ -923,6 +935,8 @@ func (b *ParseScope) transformFunctionSpec(fn *ast.FuncDecl) (*Function, error) 
 		declr.Path = strings.Join([]string{obj.Pkg().Path(), fn.Name.Name}, ".")
 
 		b.scopes[declr.Path] = FunctionScope{
+			Name:  declr.Name,
+			Path:  declr.Path,
 			Scope: map[string]Expr{},
 		}
 
@@ -933,6 +947,8 @@ func (b *ParseScope) transformFunctionSpec(fn *ast.FuncDecl) (*Function, error) 
 		declr.Path = strings.Join([]string{obj.Pkg().Path(), fn.Name.Name}, ".")
 
 		b.scopes[declr.Path] = FunctionScope{
+			Name:  declr.Name,
+			Path:  declr.Path,
 			Scope: map[string]Expr{},
 		}
 
@@ -967,6 +983,8 @@ func (b *ParseScope) transformFunctionSpec(fn *ast.FuncDecl) (*Function, error) 
 
 	fnAddr := &declr
 	b.scopes[declr.Path] = FunctionScope{
+		Name:  declr.Name,
+		Path:  declr.Path,
 		Scope: map[string]Expr{},
 	}
 
@@ -1007,10 +1025,10 @@ func (b *ParseScope) transformFunctionSpec(fn *ast.FuncDecl) (*Function, error) 
 	return &declr, nil
 }
 
-func (b *ParseScope) handleFunctionLit(fn *ast.FuncLit) (Function, error) {
-	declr, err := b.handleFunctionType("func", fn.Type)
+func (b *ParseScope) handleFunctionLit(fn *ast.FuncLit, others map[string]*Package) (*Function, error) {
+	declr, err := b.handleFunctionType(String(10), fn.Type)
 	if err != nil {
-		return Function{}, err
+		return nil, err
 	}
 
 	// read location information(line, column, source text etc) for giving type.
@@ -1020,19 +1038,17 @@ func (b *ParseScope) handleFunctionLit(fn *ast.FuncLit) (Function, error) {
 		return declr, nil
 	}
 
-	declrAddr := &declr
 	declr.resolver = func(others map[string]*Package) error {
-		body, err := b.handleBlockStmt(&declr, fn.Body, others)
+		body, err := b.handleBlockStmt(declr, fn.Body, others)
 		if err != nil {
 			return err
 		}
-		declrAddr.Body = body
+		declr.Body = body
 
 		// Collected all scoped objects and remove key from map.
-		scoped := b.scopes[declrAddr.Path].Scope
-		declrAddr.Scope = scoped
-		delete(b.scopes, declrAddr.Path)
-
+		scoped := b.scopes[declr.Path].Scope
+		declr.Scope = scoped
+		delete(b.scopes, declr.Path)
 		return nil
 	}
 
@@ -1040,15 +1056,18 @@ func (b *ParseScope) handleFunctionLit(fn *ast.FuncLit) (Function, error) {
 	return declr, nil
 }
 
-func (b *ParseScope) handleFunctionType(name string, fn *ast.FuncType) (Function, error) {
+func (b *ParseScope) handleFunctionType(name string, fn *ast.FuncType) (*Function, error) {
 	var declr Function
+	declr.Name = String(10)
 	declr.ScopeName = String(10)
-	declr.Path = strings.Join([]string{b.From.Name, "func", declr.ScopeName}, ".")
+	declr.Path = strings.Join([]string{b.From.Name, name, declr.Name}, ".")
 
 	// read location information(line, column, source text etc) for giving type.
 	declr.Location = b.getLocation(fn.Pos(), fn.End())
 
 	b.scopes[declr.Path] = FunctionScope{
+		Name:  declr.Name,
+		Path:  declr.Path,
 		Scope: map[string]Expr{},
 	}
 
@@ -1056,18 +1075,18 @@ func (b *ParseScope) handleFunctionType(name string, fn *ast.FuncType) (Function
 	if fn.Params != nil {
 		declr.Arguments, err = b.handleParameterList(name, fn.Params)
 		if err != nil {
-			return declr, err
+			return nil, err
 		}
 	}
 
 	if fn.Results != nil {
 		declr.Returns, err = b.handleParameterList(name, fn.Results)
 		if err != nil {
-			return declr, err
+			return nil, err
 		}
 	}
 
-	return declr, nil
+	return &declr, nil
 }
 
 func (b *ParseScope) handleFunctionFieldList(ownerName string, set *ast.FieldList) ([]Function, error) {
@@ -1179,17 +1198,19 @@ func (b *ParseScope) handleEmbeddedInterface(ownerName string, f *ast.Field, t a
 	switch embed := identity.(type) {
 	case *Interface:
 		host.Composes[identity.ID()] = embed
+		return nil
 	case Interface:
 		host.Composes[identity.ID()] = &embed
-	default:
-		return errors.New("expected type should be an Interface or *Interface: %#v", identity)
+		return nil
 	}
 
-	return nil
+	return errors.New("expected type should be an Interface or *Interface: %#v", identity)
 }
 
 func (b *ParseScope) handleFunctionField(ownerName string, f *ast.Field, t ast.Expr) (*Function, error) {
 	var p Function
+	p.Name = String(10)
+	p.Path = strings.Join([]string{b.From.Name, p.Name}, ".")
 
 	id, ok := t.(*ast.Ident)
 	if !ok {
@@ -1252,7 +1273,7 @@ func (b *ParseScope) handleFunctionFieldWithName(ownerName string, f *ast.Field,
 		b.comments[f.Doc] = struct{}{}
 		doc, cerr := b.handleCommentGroup(f.Doc)
 		if cerr != nil {
-			return nil, err
+			return nil, cerr
 		}
 		p.Docs = append(p.Docs, doc)
 	}
@@ -1261,7 +1282,7 @@ func (b *ParseScope) handleFunctionFieldWithName(ownerName string, f *ast.Field,
 		b.comments[f.Comment] = struct{}{}
 		doc, cerr := b.handleCommentGroup(f.Comment)
 		if cerr != nil {
-			return nil, err
+			return nil, cerr
 		}
 		p.Docs = append(p.Docs, doc)
 	}
@@ -1287,7 +1308,7 @@ func (b *ParseScope) handleFunctionFieldWithName(ownerName string, f *ast.Field,
 		}
 	}
 
-	return &p, nil
+	return p, nil
 }
 
 func (b *ParseScope) handleField(ownerName string, f *ast.Field, t ast.Expr) (Field, error) {
@@ -1732,7 +1753,7 @@ func (b *ParseScope) handleBlockStmt(dn *Function, fn *ast.BlockStmt, others map
 	gp.Location = b.getLocation(fn.Pos(), fn.End())
 
 	for _, block := range fn.List {
-		stmt, err := b.transformStmt(dn, fn, block, others)
+		stmt, err := b.transformFunctionExpr(block, fn, dn, others)
 		if err != nil {
 			return nil, err
 		}
@@ -1742,50 +1763,93 @@ func (b *ParseScope) handleBlockStmt(dn *Function, fn *ast.BlockStmt, others map
 	return &gp, nil
 }
 
-func (b *ParseScope) transformStmt(dn *Function, fn *ast.BlockStmt, block interface{}, others map[string]*Package) (Expr, error) {
-	fmt.Printf("FuncBlock[%q:  %q]: %#v\n", b.Package.File, dn.Name, block)
-	switch target := block.(type) {
+func (b *ParseScope) transformFunctionExpr(e interface{}, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (Expr, error) {
+	switch tm := e.(type) {
+	case *ast.CommClause:
+		return b.transformCommClauseStmt(fn, bn, tm, others)
+	case *ast.CaseClause:
+		return b.transformCaseClauseStmt(fn, bn, tm, others)
 	case *ast.SwitchStmt:
-		return b.transformSwitchStatement(dn, fn, target, others)
+		return b.transformSwitchStatement(fn, bn, tm, others)
 	case *ast.AssignStmt:
-		return b.transformAssignStmt(dn, fn, target, others)
+		return b.transformAssignStmt(fn, bn, tm, others)
 	case *ast.BlockStmt:
-		return b.transformBlockStmt(dn, fn, target, others)
+		return b.transformBlockStmt(fn, bn, tm, others)
 	case *ast.EmptyStmt:
-		return b.transformEmptyStmt(dn, fn, target, others)
+		return b.transformEmptyStmt(fn, bn, tm, others)
 	case *ast.BranchStmt:
-		return b.transformBranchStmt(dn, fn, target, others)
+		return b.transformBranchStmt(fn, bn, tm, others)
 	case *ast.DeferStmt:
-		return b.transformDeferStmt(dn, fn, target, others)
+		return b.transformDeferStmt(fn, bn, tm, others)
 	case *ast.DeclStmt:
-		return b.transformDeclrStmt(dn, fn, target, others)
+		return b.transformDeclrStmt(fn, bn, tm, others)
 	case *ast.BadStmt:
-		return b.transformBadStmt(dn, fn, target, others)
+		return b.transformBadStmt(fn, bn, tm, others)
 	case *ast.GoStmt:
-		return b.transformGoStmt(dn, fn, target, others)
+		return b.transformGoStmt(fn, bn, tm, others)
 	case *ast.RangeStmt:
-		return b.transformRangeStmt(dn, fn, target, others)
+		return b.transformRangeStmt(fn, bn, tm, others)
 	case *ast.TypeSwitchStmt:
-		return b.transformTypeSwitchStmt(dn, fn, target, others)
+		return b.transformTypeSwitchStmt(fn, bn, tm, others)
 	case *ast.SendStmt:
-		return b.transformSendStmt(dn, fn, target, others)
+		return b.transformSendStmt(fn, bn, tm, others)
 	case *ast.SelectStmt:
-		return b.transformSelectStmt(dn, fn, target, others)
+		return b.transformSelectStmt(fn, bn, tm, others)
 	case *ast.ReturnStmt:
-		return b.transformReturnStmt(dn, fn, target, others)
+		return b.transformReturnStmt(fn, bn, tm, others)
 	case *ast.LabeledStmt:
-		return b.transformLabeledStmt(dn, fn, target, others)
+		return b.transformLabeledStmt(fn, bn, tm, others)
 	case *ast.IncDecStmt:
-		return b.transformIncDecStmt(dn, fn, target, others)
+		return b.transformIncDecStmt(fn, bn, tm, others)
 	case *ast.IfStmt:
-		return b.transformIfStmt(dn, fn, target, others)
+		return b.transformIfStmt(fn, bn, tm, others)
 	case *ast.ForStmt:
-		return b.transformForStmt(dn, fn, target, others)
+		return b.transformForStmt(fn, bn, tm, others)
 	case *ast.ExprStmt:
-		return b.transformExprStmt(dn, fn, target, others)
+		return b.transformExprStmt(fn, bn, tm, others)
+	case *ast.BasicLit:
+		return b.transformBasicLit(tm, others)
+	case *ast.KeyValueExpr:
+		return b.transformFunctionKeyValueExpr(tm, bn, fn, others)
+	case *ast.TypeAssertExpr:
+		return b.transformFunctionTypeAssertExpr(tm, bn, fn, others)
+	case *ast.BinaryExpr:
+		return b.transformFunctionBinaryExpr(tm, bn, fn, others)
+	case *ast.IndexExpr:
+		return b.transformFunctionIndexExpr(tm, bn, fn, others)
+	case *ast.UnaryExpr:
+		return b.transformFunctionUnaryExpr(tm, bn, fn, others)
+	case *ast.ParenExpr:
+		return b.transformFunctionParentExpr(tm, bn, fn, others)
+	case *ast.CompositeLit:
+		return b.transformFunctionCompositeLitValue(tm, bn, fn, others)
+	case *ast.CallExpr:
+		return b.transformFunctionCallExpr(tm, bn, fn, others)
+	case *ast.StarExpr:
+		return b.transformFunctionStarExpr(tm, bn, fn, others)
+	case *ast.Ident:
+		return b.transformFunctionIdentExpr(tm, bn, fn, others)
+	case *ast.SliceExpr:
+		return b.transformFunctionSliceExpr(tm, bn, fn, others)
+	case *ast.SelectorExpr:
+		return b.transformFunctionSelectorExpr(tm, bn, fn, others)
+	case *ast.MapType:
+		return b.transformFunctionMapType(tm, bn, fn, others)
+	case *ast.ChanType:
+		return b.transformFunctionChanType(tm, bn, fn, others)
+	case *ast.ArrayType:
+		return b.transformFunctionArrayType(tm, bn, fn, others)
+	case *ast.FuncType:
+		return b.transformFuncType(tm, others)
+	case *ast.FuncLit:
+		return b.transformFunctionFuncList(tm, bn, fn, others)
+	case *ast.InterfaceType:
+		return b.transformInterfaceType(tm, others)
+	case *ast.StructType:
+		return b.transformStructType(tm, others)
 	}
 
-	return nil, errors.New("unable to handle giving Stmt %#v : %T", block, block)
+	return nil, errors.New("unable to handle function body type: %#v", e)
 }
 
 func (b *ParseScope) transformEmptyStmt(dn *Function, fn *ast.BlockStmt, sw *ast.EmptyStmt, others map[string]*Package) (Expr, error) {
@@ -1795,7 +1859,7 @@ func (b *ParseScope) transformEmptyStmt(dn *Function, fn *ast.BlockStmt, sw *ast
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformExprStmt(dn *Function, fn *ast.BlockStmt, sw *ast.ExprStmt, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformExprStmt(dn *Function, fn *ast.BlockStmt, sw *ast.ExprStmt, others map[string]*Package) (*StmtExpr, error) {
 	var stmt StmtExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
@@ -1808,7 +1872,7 @@ func (b *ParseScope) transformExprStmt(dn *Function, fn *ast.BlockStmt, sw *ast.
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformForStmt(dn *Function, fn *ast.BlockStmt, sw *ast.ForStmt, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformForStmt(dn *Function, fn *ast.BlockStmt, sw *ast.ForStmt, others map[string]*Package) (*ForExpr, error) {
 	var stmt ForExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
@@ -1822,7 +1886,7 @@ func (b *ParseScope) transformForStmt(dn *Function, fn *ast.BlockStmt, sw *ast.F
 	}
 
 	if sw.Post != nil {
-		postd, err := b.transformStmt(dn, fn, sw.Pos(), others)
+		postd, err := b.transformFunctionExpr(sw.Post, fn, dn, others)
 		if err != nil {
 			return nil, err
 		}
@@ -1831,7 +1895,7 @@ func (b *ParseScope) transformForStmt(dn *Function, fn *ast.BlockStmt, sw *ast.F
 	}
 
 	if sw.Init != nil {
-		initd, err := b.transformStmt(dn, fn, sw.Init, others)
+		initd, err := b.transformFunctionExpr(sw.Init, fn, dn, others)
 		if err != nil {
 			return nil, err
 		}
@@ -1839,7 +1903,7 @@ func (b *ParseScope) transformForStmt(dn *Function, fn *ast.BlockStmt, sw *ast.F
 		stmt.Init = initd
 	}
 
-	body, err := b.transformStmt(dn, fn, sw.Body, others)
+	body, err := b.transformFunctionExpr(sw.Body, fn, dn, others)
 	if err != nil {
 		return nil, err
 	}
@@ -1853,7 +1917,7 @@ func (b *ParseScope) transformForStmt(dn *Function, fn *ast.BlockStmt, sw *ast.F
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformIfStmt(dn *Function, fn *ast.BlockStmt, sw *ast.IfStmt, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformIfStmt(dn *Function, fn *ast.BlockStmt, sw *ast.IfStmt, others map[string]*Package) (*IfExpr, error) {
 	var stmt IfExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
@@ -1865,15 +1929,15 @@ func (b *ParseScope) transformIfStmt(dn *Function, fn *ast.BlockStmt, sw *ast.If
 	stmt.Cond = cond
 
 	if sw.Init != nil {
-		initd, err := b.transformStmt(dn, fn, sw.Init, others)
-		if err != nil {
-			return nil, err
+		inited, cerr := b.transformFunctionExpr(sw.Init, fn, dn, others)
+		if cerr != nil {
+			return nil, cerr
 		}
 
-		stmt.Init = initd
+		stmt.Init = inited
 	}
 
-	body, err := b.transformStmt(dn, fn, sw.Body, others)
+	body, err := b.transformFunctionExpr(sw.Body, fn, dn, others)
 	if err != nil {
 		return nil, err
 	}
@@ -1886,7 +1950,7 @@ func (b *ParseScope) transformIfStmt(dn *Function, fn *ast.BlockStmt, sw *ast.If
 	stmt.Body = gbody
 
 	if sw.Else != nil {
-		elsed, err := b.transformStmt(dn, fn, sw.Else, others)
+		elsed, err := b.transformFunctionExpr(sw.Else, fn, dn, others)
 		if err != nil {
 			return nil, err
 		}
@@ -1897,7 +1961,7 @@ func (b *ParseScope) transformIfStmt(dn *Function, fn *ast.BlockStmt, sw *ast.If
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformIncDecStmt(dn *Function, fn *ast.BlockStmt, sw *ast.IncDecStmt, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformIncDecStmt(dn *Function, fn *ast.BlockStmt, sw *ast.IncDecStmt, others map[string]*Package) (*IncDecExpr, error) {
 	var stmt IncDecExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
@@ -1916,12 +1980,12 @@ func (b *ParseScope) transformIncDecStmt(dn *Function, fn *ast.BlockStmt, sw *as
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformLabeledStmt(dn *Function, fn *ast.BlockStmt, sw *ast.LabeledStmt, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformLabeledStmt(dn *Function, fn *ast.BlockStmt, sw *ast.LabeledStmt, others map[string]*Package) (*LabeledExpr, error) {
 	var stmt LabeledExpr
 	stmt.Label = sw.Label.Name
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
-	stm, err := b.transformStmt(dn, fn, sw.Stmt, others)
+	stm, err := b.transformFunctionExpr(sw.Stmt, fn, dn, others)
 	if err != nil {
 		return nil, err
 	}
@@ -1931,7 +1995,7 @@ func (b *ParseScope) transformLabeledStmt(dn *Function, fn *ast.BlockStmt, sw *a
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformReturnStmt(dn *Function, fn *ast.BlockStmt, sw *ast.ReturnStmt, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformReturnStmt(dn *Function, fn *ast.BlockStmt, sw *ast.ReturnStmt, others map[string]*Package) (*ReturnsExpr, error) {
 	var stmt ReturnsExpr
 	stmt.Results = make([]Expr, 0, len(sw.Results))
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
@@ -1948,11 +2012,11 @@ func (b *ParseScope) transformReturnStmt(dn *Function, fn *ast.BlockStmt, sw *as
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformSelectStmt(dn *Function, fn *ast.BlockStmt, sw *ast.SelectStmt, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformSelectStmt(dn *Function, fn *ast.BlockStmt, sw *ast.SelectStmt, others map[string]*Package) (*SelectExpr, error) {
 	var stmt SelectExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
-	body, err := b.transformStmt(dn, fn, sw.Body, others)
+	body, err := b.transformFunctionExpr(sw.Body, fn, dn, others)
 	if err != nil {
 		return nil, err
 	}
@@ -1967,7 +2031,7 @@ func (b *ParseScope) transformSelectStmt(dn *Function, fn *ast.BlockStmt, sw *as
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformSendStmt(dn *Function, fn *ast.BlockStmt, sw *ast.SendStmt, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformSendStmt(dn *Function, fn *ast.BlockStmt, sw *ast.SendStmt, others map[string]*Package) (*SendExpr, error) {
 	var stmt SendExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
@@ -1988,12 +2052,12 @@ func (b *ParseScope) transformSendStmt(dn *Function, fn *ast.BlockStmt, sw *ast.
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformTypeSwitchStmt(dn *Function, fn *ast.BlockStmt, sw *ast.TypeSwitchStmt, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformTypeSwitchStmt(dn *Function, fn *ast.BlockStmt, sw *ast.TypeSwitchStmt, others map[string]*Package) (*TypeSwitchExpr, error) {
 	var stmt TypeSwitchExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
 	if sw.Assign != nil {
-		assigned, err := b.transformStmt(dn, fn, sw.Assign, others)
+		assigned, err := b.transformFunctionExpr(sw.Assign, fn, dn, others)
 		if err != nil {
 			return nil, err
 		}
@@ -2002,7 +2066,7 @@ func (b *ParseScope) transformTypeSwitchStmt(dn *Function, fn *ast.BlockStmt, sw
 	}
 
 	if sw.Init != nil {
-		initd, err := b.transformStmt(dn, fn, sw.Init, others)
+		initd, err := b.transformFunctionExpr(sw.Init, fn, dn, others)
 		if err != nil {
 			return nil, err
 		}
@@ -2010,7 +2074,7 @@ func (b *ParseScope) transformTypeSwitchStmt(dn *Function, fn *ast.BlockStmt, sw
 		stmt.Init = initd
 	}
 
-	body, err := b.transformStmt(dn, fn, sw.Body, others)
+	body, err := b.transformFunctionExpr(sw.Body, fn, dn, others)
 	if err != nil {
 		return nil, err
 	}
@@ -2025,47 +2089,55 @@ func (b *ParseScope) transformTypeSwitchStmt(dn *Function, fn *ast.BlockStmt, sw
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformRangeStmt(dn *Function, fn *ast.BlockStmt, sw *ast.RangeStmt, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformRangeStmt(dn *Function, fn *ast.BlockStmt, sw *ast.RangeStmt, others map[string]*Package) (*RangeExpr, error) {
 	var stmt RangeExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
-	body, err := b.transformStmt(dn, fn, sw.Body, others)
-	if err != nil {
-		return nil, err
+	if sw.Body != nil {
+		body, err := b.transformFunctionExpr(sw.Body, fn, dn, others)
+		if err != nil {
+			return nil, err
+		}
+
+		gbody, ok := body.(*GroupStmt)
+		if !ok {
+			return nil, errors.New("body of RangeStmt must be type *GroupStmt")
+		}
+
+		stmt.Body = gbody
 	}
 
-	gbody, ok := body.(*GroupStmt)
-	if !ok {
-		return nil, errors.New("body of RangeStmt must be type *GroupStmt")
+	if sw.X != nil {
+		x, err := b.transformFunctionExpr(sw.X, fn, dn, others)
+		if err != nil {
+			return nil, err
+		}
+
+		stmt.X = x
 	}
 
-	stmt.Body = gbody
+	if sw.Key != nil {
+		key, err := b.transformFunctionExpr(sw.Key, fn, dn, others)
+		if err != nil {
+			return nil, err
+		}
 
-	x, err := b.transformStmt(dn, fn, sw.X, others)
-	if err != nil {
-		return nil, err
+		stmt.Key = key
 	}
 
-	stmt.X = x
+	if sw.Value != nil {
+		val, err := b.transformFunctionExpr(sw.Value, fn, dn, others)
+		if err != nil {
+			return nil, err
+		}
 
-	key, err := b.transformFunctionExpr(sw.Key, fn, dn, others)
-	if err != nil {
-		return nil, err
+		stmt.Value = val
 	}
-
-	stmt.Key = key
-
-	val, err := b.transformFunctionExpr(sw.Value, fn, dn, others)
-	if err != nil {
-		return nil, err
-	}
-
-	stmt.Value = val
 
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformDeclrStmt(dn *Function, fn *ast.BlockStmt, sw *ast.DeclStmt, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformDeclrStmt(dn *Function, fn *ast.BlockStmt, sw *ast.DeclStmt, others map[string]*Package) (*DeclrExpr, error) {
 	var stmt DeclrExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
@@ -2137,7 +2209,7 @@ func (b *ParseScope) transformDeclrSpecStmt(spec ast.Spec, gen *ast.GenDecl) ([]
 	return nil, errors.New("unable to handle ast.Spec %T", spec)
 }
 
-func (b *ParseScope) transformGoStmt(dn *Function, fn *ast.BlockStmt, sw *ast.GoStmt, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformGoStmt(dn *Function, fn *ast.BlockStmt, sw *ast.GoStmt, others map[string]*Package) (*GoExpr, error) {
 	var stmt GoExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
@@ -2155,13 +2227,13 @@ func (b *ParseScope) transformGoStmt(dn *Function, fn *ast.BlockStmt, sw *ast.Go
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformBadStmt(dn *Function, fn *ast.BlockStmt, sw *ast.BadStmt, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformBadStmt(dn *Function, fn *ast.BlockStmt, sw *ast.BadStmt, others map[string]*Package) (*BadExpr, error) {
 	var stmt BadExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformDeferStmt(dn *Function, fn *ast.BlockStmt, sw *ast.DeferStmt, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformDeferStmt(dn *Function, fn *ast.BlockStmt, sw *ast.DeferStmt, others map[string]*Package) (*DeferExpr, error) {
 	var stmt DeferExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
@@ -2179,7 +2251,7 @@ func (b *ParseScope) transformDeferStmt(dn *Function, fn *ast.BlockStmt, sw *ast
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformBranchStmt(dn *Function, fn *ast.BlockStmt, sw *ast.BranchStmt, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformBranchStmt(dn *Function, fn *ast.BlockStmt, sw *ast.BranchStmt, others map[string]*Package) (*BranchExpr, error) {
 	var stmt BranchExpr
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
@@ -2195,19 +2267,56 @@ func (b *ParseScope) transformBranchStmt(dn *Function, fn *ast.BlockStmt, sw *as
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformAssignStmt(dn *Function, fn *ast.BlockStmt, sw *ast.AssignStmt, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformAssignStmt(dn *Function, fn *ast.BlockStmt, sw *ast.AssignStmt, others map[string]*Package) (*AssignExpr, error) {
+	// Get the function scope map.
+	scope := b.scopes[dn.Path]
+
 	var stmt AssignExpr
 	stmt.Pairs = make([]VariableValuePair, 0, len(sw.Lhs))
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
-	for index, key := range sw.Lhs {
-		value := sw.Rhs[index]
+	assignedLeft := len(sw.Lhs)
+	assignedRight := len(sw.Rhs)
 
+	// if we have a case where the right is 1 and the left is more than one then the values for left is the values
+	// received from right.
+	if assignedRight == 1 && assignedLeft > 1 {
+		varValue, err := b.transformFunctionExpr(sw.Rhs[0], fn, dn, others)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, key := range sw.Lhs {
+			varKey, err := b.transformFunctionExpr(key, fn, dn, others)
+			if err != nil {
+				return nil, err
+			}
+
+			var pair VariableValuePair
+			pair.Key = varKey
+			pair.Value = varValue
+			pair.Location = b.getLocation(key.Pos(), key.End())
+			stmt.Pairs = append(stmt.Pairs, pair)
+
+			scopedPath := strings.Join([]string{dn.Name, varKey.ID()}, ".")
+			scope.Scope[scopedPath] = varValue
+		}
+
+		return &stmt, nil
+	}
+
+	if assignedLeft != assignedRight {
+		return nil, errors.New("Numbers of assigned must be equal to number of declared values: Values: %d Assigned: %d", assignedLeft, assignedRight)
+	}
+
+	// Here the total values of left and right must be the same.
+	for index, key := range sw.Lhs {
 		varKey, err := b.transformFunctionExpr(key, fn, dn, others)
 		if err != nil {
 			return nil, err
 		}
 
+		value := sw.Rhs[index]
 		varValue, err := b.transformFunctionExpr(value, fn, dn, others)
 		if err != nil {
 			return nil, err
@@ -2218,12 +2327,15 @@ func (b *ParseScope) transformAssignStmt(dn *Function, fn *ast.BlockStmt, sw *as
 		pair.Value = varValue
 		pair.Location = b.getLocation(key.Pos(), key.End())
 		stmt.Pairs = append(stmt.Pairs, pair)
+
+		scopedPath := strings.Join([]string{dn.Name, varKey.ID()}, ".")
+		scope.Scope[scopedPath] = varValue
 	}
 
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformBlockStmt(dn *Function, pa *ast.BlockStmt, sw *ast.BlockStmt, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformBlockStmt(dn *Function, pa *ast.BlockStmt, sw *ast.BlockStmt, others map[string]*Package) (*GroupStmt, error) {
 	var gp GroupStmt
 	gp.EndSymbol = "}"
 	gp.BeginSymbol = "{"
@@ -2234,7 +2346,7 @@ func (b *ParseScope) transformBlockStmt(dn *Function, pa *ast.BlockStmt, sw *ast
 	gp.Location = b.getLocation(sw.Pos(), sw.End())
 
 	for _, block := range sw.List {
-		stmt, err := b.transformStmt(dn, sw, block, others)
+		stmt, err := b.transformFunctionExpr(block, sw, dn, others)
 		if err != nil {
 			return nil, err
 		}
@@ -2244,72 +2356,114 @@ func (b *ParseScope) transformBlockStmt(dn *Function, pa *ast.BlockStmt, sw *ast
 	return &gp, nil
 }
 
-func (b *ParseScope) transformSwitchStatement(dn *Function, fn *ast.BlockStmt, sw *ast.SwitchStmt, others map[string]*Package) (Expr, error) {
-	var stmt SwitchExpr
+func (b *ParseScope) transformCommClauseStmt(dn *Function, fn *ast.BlockStmt, sw *ast.CommClause, others map[string]*Package) (*SelectCaseExpr, error) {
+	var stmt SelectCaseExpr
+	stmt.Body = make([]Expr, 0, len(sw.Body))
 	stmt.Location = b.getLocation(sw.Pos(), sw.End())
 
-	initd, err := b.transformStmt(dn, fn, sw.Init, others)
-	if err != nil {
-		return nil, err
+	if sw.Comm != nil {
+		elem, err := b.transformFunctionExpr(sw.Comm, fn, dn, others)
+		if err != nil {
+			return nil, err
+		}
+
+		stmt.Comm = elem
 	}
 
-	stmt.Init = initd
+	for _, item := range sw.Body {
+		elem, err := b.transformFunctionExpr(item, fn, dn, others)
+		if err != nil {
+			return nil, err
+		}
 
-	body, err := b.transformStmt(dn, fn, sw.Body, others)
-	if err != nil {
-		return nil, err
+		stmt.Body = append(stmt.Body, elem)
 	}
 
-	gbody, ok := body.(*GroupStmt)
-	if !ok {
-		return nil, errors.New("body of RangeStmt must be type *GroupStmt")
-	}
-
-	stmt.Body = gbody
-
-	tags, err := b.transformFunctionExpr(sw.Tag, fn, dn, others)
-	if err != nil {
-		return nil, err
-	}
-
-	stmt.Tag = tags
 	return &stmt, nil
 }
 
-func (b *ParseScope) transformFunctionExpr(e interface{}, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (Expr, error) {
-	fmt.Printf("FunctionBody[%q] -> %T \n", fn.Name, e)
-	switch tm := e.(type) {
-	case *ast.KeyValueExpr:
-		return b.transformFunctionKeyValueExpr(tm, bn, fn, others)
-	case *ast.BasicLit:
-		return b.transformFunctionBasicLit(tm, bn, fn, others)
-	case *ast.TypeAssertExpr:
-		return b.transformFunctionTypeAssertExpr(tm, bn, fn, others)
-	case *ast.BinaryExpr:
-		return b.transformFunctionBinaryExpr(tm, bn, fn, others)
-	case *ast.IndexExpr:
-		return b.transformFunctionIndexExpr(tm, bn, fn, others)
-	case *ast.UnaryExpr:
-		return b.transformFunctionUnaryExpr(tm, bn, fn, others)
-	case *ast.ParenExpr:
-		return b.transformFunctionParentExpr(tm, bn, fn, others)
-	case *ast.CallExpr:
-		return b.transformFunctionCallExpr(tm, bn, fn, others)
-	case *ast.StarExpr:
-		return b.transformFunctionStarExpr(tm, bn, fn, others)
-	case *ast.Ident:
-		return b.transformFunctionIdentExpr(tm, bn, fn, others)
-	case *ast.SelectorExpr:
-		return b.transformFunctionSelectorExpr(tm, bn, fn, others)
+func (b *ParseScope) transformCaseClauseStmt(dn *Function, fn *ast.BlockStmt, sw *ast.CaseClause, others map[string]*Package) (*SwitchCaseExpr, error) {
+	var stmt SwitchCaseExpr
+	stmt.Body = make([]Expr, 0, len(sw.Body))
+	stmt.Conditions = make([]Expr, 0, len(sw.List))
+	stmt.Location = b.getLocation(sw.Pos(), sw.End())
+
+	for _, item := range sw.List {
+		elem, err := b.transformFunctionExpr(item, fn, dn, others)
+		if err != nil {
+			return nil, err
+		}
+
+		stmt.Conditions = append(stmt.Conditions, elem)
 	}
-	return nil, errors.New("unable to handle function body type: %#v", e)
+
+	for _, item := range sw.Body {
+		elem, err := b.transformFunctionExpr(item, fn, dn, others)
+		if err != nil {
+			return nil, err
+		}
+
+		stmt.Body = append(stmt.Body, elem)
+	}
+
+	return &stmt, nil
+}
+
+func (b *ParseScope) transformSwitchStatement(dn *Function, fn *ast.BlockStmt, sw *ast.SwitchStmt, others map[string]*Package) (*SwitchExpr, error) {
+	var stmt SwitchExpr
+	stmt.Location = b.getLocation(sw.Pos(), sw.End())
+
+	if sw.Init != nil {
+		initd, err := b.transformFunctionExpr(sw.Init, fn, dn, others)
+		if err != nil {
+			return nil, err
+		}
+
+		stmt.Init = initd
+	}
+
+	if sw.Body != nil {
+		body, err := b.transformFunctionExpr(sw.Body, fn, dn, others)
+		if err != nil {
+			return nil, err
+		}
+
+		gbody, ok := body.(*GroupStmt)
+		if !ok {
+			return nil, errors.New("body of RangeStmt must be type *GroupStmt")
+		}
+
+		stmt.Body = gbody
+	}
+
+	if sw.Tag != nil {
+		tags, err := b.transformFunctionExpr(sw.Tag, fn, dn, others)
+		if err != nil {
+			return nil, err
+		}
+
+		stmt.Tag = tags
+	}
+
+	return &stmt, nil
 }
 
 //**********************************************************************************
 // Function Body Field Relation Functions
 //**********************************************************************************
 
-func (b *ParseScope) transformFunctionIndexExpr(src *ast.IndexExpr, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformFunctionFuncList(src *ast.FuncLit, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (*Function, error) {
+	fm, err := b.handleFunctionLit(src, others)
+	if err != nil {
+		return nil, err
+	}
+
+	scope := b.scopes[fn.Path]
+	b.parentScopes[fm.Path] = scope
+	return fm, nil
+}
+
+func (b *ParseScope) transformFunctionIndexExpr(src *ast.IndexExpr, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (*IndexExpr, error) {
 	var val IndexExpr
 	val.Location = b.getLocation(src.Pos(), src.End())
 
@@ -2319,17 +2473,17 @@ func (b *ParseScope) transformFunctionIndexExpr(src *ast.IndexExpr, bn *ast.Bloc
 	}
 	val.Elem = elem
 
-	switch id := src.Index.(type) {
-	case *ast.BasicLit:
-		val.Index = id.Value
-	default:
-		return nil, errors.New("unable to handle index type: %#v", id)
+	indexed, err := b.transformFunctionExpr(src.Index, bn, fn, others)
+	if err != nil {
+		return nil, err
 	}
+
+	val.Index = indexed
 
 	return &val, nil
 }
 
-func (b *ParseScope) transformFunctionTypeAssertExpr(src *ast.TypeAssertExpr, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformFunctionTypeAssertExpr(src *ast.TypeAssertExpr, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (*TypeAssert, error) {
 	var ts TypeAssert
 
 	// read location information(line, column, source text etc) for giving type.
@@ -2342,17 +2496,19 @@ func (b *ParseScope) transformFunctionTypeAssertExpr(src *ast.TypeAssertExpr, bn
 
 	ts.X = xt
 
-	tt, err := b.transformFunctionExpr(src.Type, bn, fn, others)
-	if err != nil {
-		return nil, err
-	}
+	if src.Type != nil {
+		tt, err := b.transformFunctionExpr(src.Type, bn, fn, others)
+		if err != nil {
+			return nil, err
+		}
 
-	ts.Type = tt
+		ts.Type = tt
+	}
 
 	return &ts, nil
 }
 
-func (b *ParseScope) transformFunctionKeyValueExpr(src *ast.KeyValueExpr, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformFunctionKeyValueExpr(src *ast.KeyValueExpr, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (*KeyValuePair, error) {
 	var pair KeyValuePair
 
 	// read location information(line, column, source text etc) for giving type.
@@ -2401,7 +2557,7 @@ func (b *ParseScope) transformFunctionUnaryExpr(src *ast.UnaryExpr, bn *ast.Bloc
 	return &val, nil
 }
 
-func (b *ParseScope) transformFunctionParentExpr(src *ast.ParenExpr, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformFunctionParentExpr(src *ast.ParenExpr, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (*ParenExpr, error) {
 	var bin ParenExpr
 	elem, err := b.transformFunctionExpr(src.X, bn, fn, others)
 	if err != nil {
@@ -2411,7 +2567,7 @@ func (b *ParseScope) transformFunctionParentExpr(src *ast.ParenExpr, bn *ast.Blo
 	return &bin, nil
 }
 
-func (b *ParseScope) transformFunctionCallExpr(src *ast.CallExpr, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformFunctionCallExpr(src *ast.CallExpr, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (*CallExpr, error) {
 	var val CallExpr
 	val.Location = b.getLocation(src.Pos(), src.End())
 
@@ -2433,7 +2589,7 @@ func (b *ParseScope) transformFunctionCallExpr(src *ast.CallExpr, bn *ast.BlockS
 	return &val, nil
 }
 
-func (b *ParseScope) transformFunctionBinaryExpr(src *ast.BinaryExpr, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformFunctionBinaryExpr(src *ast.BinaryExpr, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (*BinaryExpr, error) {
 	var bin BinaryExpr
 	bin.Op = src.Op.String()
 
@@ -2452,14 +2608,7 @@ func (b *ParseScope) transformFunctionBinaryExpr(src *ast.BinaryExpr, bn *ast.Bl
 	return &bin, nil
 }
 
-func (b *ParseScope) transformFunctionBasicLit(e *ast.BasicLit, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (*BaseValue, error) {
-	var bm BaseValue
-	bm.Value = e.Value
-	bm.Location = b.getLocation(e.Pos(), e.End())
-	return &bm, nil
-}
-
-func (b *ParseScope) transformFunctionStarExpr(e *ast.StarExpr, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (Expr, error) {
+func (b *ParseScope) transformFunctionStarExpr(e *ast.StarExpr, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (*Pointer, error) {
 	var p Pointer
 	p.Location = b.getLocation(e.Pos(), e.End())
 	elem, err := b.transformFunctionExpr(e.X, bn, fn, others)
@@ -2551,18 +2700,143 @@ func (b *ParseScope) transformFunctionIdentExpr(base *ast.Ident, bn *ast.BlockSt
 	return vard, nil
 }
 
+func (b *ParseScope) transformFunctionSliceExpr(e *ast.SliceExpr, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (*SliceExpr, error) {
+	var declr SliceExpr
+	declr.Location = b.getLocation(e.Pos(), e.End())
+
+	target, err := b.transformFunctionExpr(e.X, bn, fn, others)
+	if err != nil {
+		return nil, err
+	}
+
+	declr.Target = target
+
+	if e.Max != nil {
+		max, cerr := b.transformFunctionExpr(e.Max, bn, fn, others)
+		if cerr != nil {
+			return nil, cerr
+		}
+
+		declr.Max = max
+	}
+
+	if e.Low != nil {
+		lowest, cerr := b.transformFunctionExpr(e.Low, bn, fn, others)
+		if cerr != nil {
+			return nil, cerr
+		}
+
+		declr.Lowest = lowest
+	}
+
+	if e.High != nil {
+		highest, cerr := b.transformFunctionExpr(e.High, bn, fn, others)
+		if err != nil {
+			return nil, cerr
+		}
+
+		declr.Highest = highest
+	}
+
+	return &declr, err
+}
+
+func (b *ParseScope) transformFunctionArrayType(e *ast.ArrayType, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (*List, error) {
+	var declr List
+	if _, ok := e.Elt.(*ast.StarExpr); ok {
+		declr.IsPointer = true
+	}
+
+	// read location information(line, column, source text etc) for giving type.
+	declr.Location = b.getLocation(e.Pos(), e.End())
+
+	var err error
+	declr.Type, err = b.transformFunctionExpr(e.Elt, bn, fn, others)
+	return &declr, err
+}
+
+func (b *ParseScope) transformFunctionChanType(e *ast.ChanType, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (*Channel, error) {
+	var err error
+	var declr Channel
+
+	// read location information(line, column, source text etc) for giving type.
+	declr.Location = b.getLocation(e.Pos(), e.End())
+
+	declr.Type, err = b.transformFunctionExpr(e.Value, bn, fn, others)
+	return &declr, err
+}
+
+func (b *ParseScope) transformFunctionMapType(e *ast.MapType, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (*Map, error) {
+	var declr Map
+
+	var err error
+	declr.KeyType, err = b.transformFunctionExpr(e.Key, bn, fn, others)
+	if err != nil {
+		return nil, err
+	}
+
+	declr.ValueType, err = b.transformFunctionExpr(e.Value, bn, fn, others)
+	if err != nil {
+		return nil, err
+	}
+
+	return &declr, nil
+}
+
 func (b *ParseScope) transformFunctionSelectorExpr(e *ast.SelectorExpr, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (Expr, error) {
-	fmt.Printf("Function[%q] -> %#v = %#v\n", fn.Name, e.X, e.Sel)
 	switch tm := e.X.(type) {
 	case *ast.Ident:
 		return b.transformFunctionSelectorExprWithXIdent(tm, e, bn, fn, others)
 	case *ast.CallExpr:
 		return b.transformFunctionSelectorExprWithXCallExpr(tm, e, bn, fn, others)
+	case *ast.IndexExpr:
+		return b.transformFunctionSelectorExprWithXIndexExpr(tm, e, bn, fn, others)
 	case *ast.SelectorExpr:
 		return b.transformFunctionSelectorExprWithXSelector(tm, e, bn, fn, others)
 	}
 
-	return nil, errors.New("unable to handle function body selector type: %#v", e)
+	return b.transformFunctionSelectorExprWithX(e.X, e, bn, fn, others)
+}
+
+func (b *ParseScope) transformFunctionSelectorExprWithXIndexExpr(base *ast.IndexExpr, e *ast.SelectorExpr, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (*IndexedProperty, error) {
+	target, err := b.transformFunctionIndexExpr(base, bn, fn, others)
+	if err != nil {
+		return nil, err
+	}
+
+	var assigned IndexedProperty
+	assigned.Index = target
+
+	targettedProperty, err := b.locateRefFromObject([]string{e.Sel.Name, e.Sel.Name}, target.Elem, others)
+	if err != nil {
+		return nil, err
+	}
+
+	assigned.Property = targettedProperty
+	return &assigned, nil
+}
+
+func (b *ParseScope) runScopeTree(base *ast.Ident, path string) (Expr, error) {
+	// Find if this scope has a parent, then attempt running through that.
+	parentScope, ok := b.parentScopes[path]
+	if !ok {
+		return &UnknownExpr{
+			File:  b.Package,
+			Error: errors.Wrap(ErrNotFound, "property %q in %q not found in scope tree %q", base.Name, path),
+		}, nil
+	}
+
+	// Get scope path for giving property, we need to confirm if we've already
+	// seen/proc this before.
+	scopedPath := strings.Join([]string{parentScope.Name, base.Name}, ".")
+
+	// if this scopedPath has being added before, use that.
+	if scopedVar, ok := parentScope.Scope[scopedPath]; ok {
+		return scopedVar, nil
+	}
+
+	// if not, check if we have another parent scope then return.
+	return b.runScopeTree(base, parentScope.Path)
 }
 
 func (b *ParseScope) transformFunctionSelectorExprWithXIdent(base *ast.Ident, e *ast.SelectorExpr, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (Expr, error) {
@@ -2683,17 +2957,36 @@ func (b *ParseScope) transformFunctionSelectorExprWithXIdent(base *ast.Ident, e 
 		}
 
 		// Search for variables within package.
-		if targetVariable, err := b.From.GetVariable(base.Name); err == nil {
+		if targetVariable, err := b.From.GetVariable(base.Name, ""); err == nil {
 			if external, err := b.locateRefFromObject([]string{e.Sel.Name}, targetVariable, others); err == nil {
 				scope.Scope[scopedPath] = external
 				return external, nil
 			}
 		}
 
+		// lets search by platform for giving variable.
+		for plat := range b.Package.Platforms {
+			if targetVariable, err := b.From.GetVariable(base.Name, plat); err == nil {
+				if external, err := b.locateRefFromObject([]string{e.Sel.Name}, targetVariable, others); err == nil {
+					scope.Scope[scopedPath] = external
+					return external, nil
+				}
+			}
+		}
+
+		// lets search by architecture for giving variable.
+		for arch := range b.Package.Archs {
+			if targetVariable, err := b.From.GetVariable(base.Name, arch); err == nil {
+				if external, err := b.locateRefFromObject([]string{e.Sel.Name}, targetVariable, others); err == nil {
+					scope.Scope[scopedPath] = external
+					return external, nil
+				}
+			}
+		}
+
 		// Then this is an external package alias be used to access
 		// a function, type, variable.
 		if targetImport, err := b.getImportFromAlias(base.Name, others); err == nil {
-			fmt.Printf("Target package Option: %#v :: %#v :: %q\n", base.Name, e.Sel, targetImport.Path)
 			importedTarget, err := b.locateRefFromPackage(e.Sel.Name, targetImport.Path, others)
 			if err != nil {
 				return nil, err
@@ -2703,8 +2996,7 @@ func (b *ParseScope) transformFunctionSelectorExprWithXIdent(base *ast.Ident, e 
 			return importedTarget, nil
 		}
 
-		fmt.Printf("3rd Option: %#v :: %#v\n", base.Name, e.Sel)
-		return nil, errors.Wrap(ErrNotFound, "property %q in %q within function %q not scoped through variable assigned", base.Name, e.Sel.Name, fn.Name)
+		return b.runScopeTree(base, fn.Path)
 	}
 
 	// We found a target either in the argument or named returned type.
@@ -2740,8 +3032,7 @@ func (b *ParseScope) transformFunctionSelectorExprWithXSelector(base *ast.Select
 	// 2. It is a multi-select on a declared variable in the function body.
 	// 3. It is a multi-select on a imported package field or type in the function body.
 
-	fmt.Printf("SelX-P[%q] -> %#v = %#v\n", parent.Sel.Name, base.X, base.Sel)
-	parts, err := b.getSelectorTree(nil, base, parent, others)
+	parts, lastSel, err := b.getSelectorTree(nil, base, parent, others)
 	if err != nil {
 		return nil, err
 	}
@@ -2751,23 +3042,55 @@ func (b *ParseScope) transformFunctionSelectorExprWithXSelector(base *ast.Select
 		return scopedVar, nil
 	}
 
-	fmt.Printf("SelX-Part[%q] ->  %#q\n", parent.Sel.Name, parts)
-
 	// To deal with case 1 and 2:
 	root, err := b.transformFunctionIdentExpr(&ast.Ident{Name: parts[0]}, bn, fn, others)
-	fmt.Printf("SelX-Part-Root[%q] ->  %#v\n", parts[0], root)
 	if err != nil {
 		return nil, err
 	}
 
-	fmt.Printf("SelX-Part-Root[%q] ->  %#v\n", parts, root)
 	locatedTarget, err := b.locateRefFromObject(parts, root, others)
 	if err != nil {
 		return nil, err
 	}
 
 	scope.Scope[scopedPath] = locatedTarget
-	return locatedTarget, nil
+
+	if lastSel == nil {
+		return locatedTarget, nil
+	}
+
+	procElem, err := b.transformTypeFor(lastSel.X, others)
+	if err != nil {
+		return nil, err
+	}
+
+	derivedElem, err := b.locateRefFromObject([]string{lastSel.Sel.Name}, procElem, others)
+	if err != nil {
+		return nil, err
+	}
+
+	return derivedElem, nil
+}
+
+func (b *ParseScope) transformFunctionSelectorExprWithX(base ast.Expr, parent *ast.SelectorExpr, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (Expr, error) {
+	// Get the function scope map.
+	scope := b.scopes[fn.Path]
+	if scopedVar, ok := scope.Scope[parent.Sel.Name]; ok {
+		return scopedVar, nil
+	}
+
+	calledExpr, err := b.transformFunctionExpr(base, bn, fn, others)
+	if err != nil {
+		return nil, err
+	}
+
+	selectedTarget, err := b.locateRefFromObject([]string{parent.Sel.Name}, calledExpr, others)
+	if err != nil {
+		return nil, err
+	}
+
+	scope.Scope[parent.Sel.Name] = selectedTarget
+	return selectedTarget, nil
 }
 
 func (b *ParseScope) transformFunctionSelectorExprWithXCallExpr(base *ast.CallExpr, parent *ast.SelectorExpr, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (Expr, error) {
@@ -2777,17 +3100,11 @@ func (b *ParseScope) transformFunctionSelectorExprWithXCallExpr(base *ast.CallEx
 		return scopedVar, nil
 	}
 
-	called, err := b.transformFunctionCallExpr(base, bn, fn, others)
+	calledExpr, err := b.transformFunctionCallExpr(base, bn, fn, others)
 	if err != nil {
 		return nil, err
 	}
 
-	calledExpr, ok := called.(*CallExpr)
-	if !ok {
-		return nil, errors.New("returned type is not *CallExpr: %T", called)
-	}
-
-	fmt.Printf("Call-X[%q] -> %#v\n", parent.Sel.Name, calledExpr.Func)
 	selectedTarget, err := b.locateRefFromObject([]string{parent.Sel.Name}, calledExpr.Func, others)
 	if err != nil {
 		return nil, err
@@ -2795,6 +3112,275 @@ func (b *ParseScope) transformFunctionSelectorExprWithXCallExpr(base *ast.CallEx
 
 	scope.Scope[parent.Sel.Name] = selectedTarget
 	return selectedTarget, nil
+}
+
+func (b *ParseScope) transformFunctionCompositeLitValue(src *ast.CompositeLit, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (Expr, error) {
+	if src.Type == nil {
+		return b.transformFunctionNoTypeComposite(src, bn, fn, others)
+	}
+
+	switch elem := src.Type.(type) {
+	case *ast.Ident:
+		return b.transformFunctionIdentComposite(elem, src, bn, fn, others)
+	case *ast.SelectorExpr:
+		return b.transformFunctionSelectorComposite(elem, src, bn, fn, others)
+	case *ast.StructType:
+		return b.transformFunctionStructComposite(elem, src, bn, fn, others)
+	case *ast.ArrayType:
+		return b.transformFunctionArrayComposite(elem, src, bn, fn, others)
+	case *ast.MapType:
+		return b.transformFunctionMapComposite(elem, src, bn, fn, others)
+	}
+	return nil, errors.New("unable to handle ast.Composite type %T %#v", src.Type, src)
+}
+
+func (b *ParseScope) transformFunctionMapTypeComposite(tl *types.Map, src *ast.CompositeLit, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (*DeclaredMapValue, error) {
+	var val DeclaredMapValue
+	val.Location = b.getLocation(src.Pos(), src.End())
+
+	if len(src.Elts) == 0 {
+		return &val, nil
+	}
+
+	for _, elem := range src.Elts {
+		kv, ok := elem.(*ast.KeyValueExpr)
+		if !ok {
+			return nil, errors.New("CompositeLit for Map type must have KeyValueExpr as children")
+		}
+
+		pk, err := b.transformFunctionExpr(kv.Key, bn, fn, others)
+		if err != nil {
+			return nil, err
+		}
+
+		pv, err := b.transformFunctionExpr(kv.Value, bn, fn, others)
+		if err != nil {
+			return nil, err
+		}
+
+		val.KeyValues = append(val.KeyValues, KeyValuePair{Key: pk, Value: pv})
+	}
+
+	return &val, nil
+}
+
+func (b *ParseScope) transformFunctionMapComposite(tl *ast.MapType, src *ast.CompositeLit, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (*DeclaredMapValue, error) {
+	var val DeclaredMapValue
+	val.Location = b.getLocation(src.Pos(), src.End())
+
+	if len(src.Elts) == 0 {
+		return &val, nil
+	}
+
+	for _, elem := range src.Elts {
+		kv, ok := elem.(*ast.KeyValueExpr)
+		if !ok {
+			return nil, errors.New("CompositeLit for Map type must have KeyValueExpr as children")
+		}
+
+		pk, err := b.transformFunctionExpr(kv.Key, bn, fn, others)
+		if err != nil {
+			return nil, err
+		}
+
+		pv, err := b.transformFunctionExpr(kv.Value, bn, fn, others)
+		if err != nil {
+			return nil, err
+		}
+
+		val.KeyValues = append(val.KeyValues, KeyValuePair{Key: pk, Value: pv})
+	}
+
+	return &val, nil
+}
+
+func (b *ParseScope) transformFunctionNoTypeComposite(src *ast.CompositeLit, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (*DeclaredValue, error) {
+	var val DeclaredValue
+	val.Location = b.getLocation(src.Pos(), src.End())
+
+	if len(src.Elts) == 0 {
+		return &val, nil
+	}
+
+	for _, elem := range src.Elts {
+		item, err := b.transformFunctionExpr(elem, bn, fn, others)
+		if err != nil {
+			return nil, err
+		}
+		val.Values = append(val.Values, item)
+	}
+
+	return &val, nil
+}
+
+func (b *ParseScope) transformFunctionArrayComposite(tl *ast.ArrayType, src *ast.CompositeLit, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (*DeclaredListValue, error) {
+	var val DeclaredListValue
+	val.Location = b.getLocation(src.Pos(), src.End())
+
+	if len(src.Elts) == 0 {
+		return &val, nil
+	}
+
+	for _, elem := range src.Elts {
+		item, err := b.transformFunctionExpr(elem, bn, fn, others)
+		if err != nil {
+			return nil, err
+		}
+		val.Values = append(val.Values, item)
+	}
+
+	return &val, nil
+}
+
+func (b *ParseScope) transformFunctionSliceTypeComposite(tl *types.Slice, src *ast.CompositeLit, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (*DeclaredListValue, error) {
+	var val DeclaredListValue
+	val.Location = b.getLocation(src.Pos(), src.End())
+
+	if len(src.Elts) == 0 {
+		return &val, nil
+	}
+
+	for _, elem := range src.Elts {
+		item, err := b.transformFunctionExpr(elem, bn, fn, others)
+		if err != nil {
+			return nil, err
+		}
+		val.Values = append(val.Values, item)
+	}
+
+	return &val, nil
+}
+
+func (b *ParseScope) transformFunctionArrayTypeComposite(tl *types.Array, src *ast.CompositeLit, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (*DeclaredListValue, error) {
+	var val DeclaredListValue
+	val.Length = tl.Len()
+	val.Location = b.getLocation(src.Pos(), src.End())
+
+	if len(src.Elts) == 0 {
+		return &val, nil
+	}
+
+	for _, elem := range src.Elts {
+		item, err := b.transformFunctionExpr(elem, bn, fn, others)
+		if err != nil {
+			return nil, err
+		}
+		val.Values = append(val.Values, item)
+	}
+
+	return &val, nil
+}
+
+func (b *ParseScope) transformFunctionStructTypeComposite(tl *types.Struct, src *ast.CompositeLit, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (*DeclaredStructValue, error) {
+	var val DeclaredStructValue
+	val.Fields = map[string]Expr{}
+	val.Location = b.getLocation(src.Pos(), src.End())
+
+	if len(src.Elts) == 0 {
+		return &val, nil
+	}
+
+	for _, elem := range src.Elts {
+		switch belem := elem.(type) {
+		case *ast.BasicLit:
+			val.ValuesOnly = true
+			member, err := b.transformFunctionExpr(belem, bn, fn, others)
+			if err != nil {
+				return nil, err
+			}
+			val.Values = append(val.Values, member)
+		case *ast.KeyValueExpr:
+			fieldName, ok := belem.Key.(*ast.Ident)
+			if !ok {
+				return nil, errors.New("ast.KeyValueExpr should be a *ast.Ident: %#v", belem.Key)
+			}
+
+			fieldVal, err := b.transformFunctionExpr(belem.Value, bn, fn, others)
+			if err != nil {
+				return nil, err
+			}
+
+			val.Fields[fieldName.Name] = fieldVal
+		}
+	}
+
+	return &val, nil
+}
+
+func (b *ParseScope) transformFunctionStructComposite(tl *ast.StructType, src *ast.CompositeLit, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (*DeclaredStructValue, error) {
+	var val DeclaredStructValue
+	val.Fields = map[string]Expr{}
+	val.Location = b.getLocation(src.Pos(), src.End())
+
+	if len(src.Elts) == 0 {
+		return &val, nil
+	}
+
+	for _, elem := range src.Elts {
+		switch belem := elem.(type) {
+		case *ast.BasicLit:
+			val.ValuesOnly = true
+			member, err := b.transformFunctionExpr(belem, bn, fn, others)
+			if err != nil {
+				return nil, err
+			}
+			val.Values = append(val.Values, member)
+		case *ast.KeyValueExpr:
+			fieldName, ok := belem.Key.(*ast.Ident)
+			if !ok {
+				return nil, errors.New("ast.KeyValueExpr should be a *ast.Ident: %#v", belem.Key)
+			}
+
+			fieldVal, err := b.transformFunctionExpr(belem.Value, bn, fn, others)
+			if err != nil {
+				return nil, err
+			}
+
+			val.Fields[fieldName.Name] = fieldVal
+		}
+	}
+
+	return &val, nil
+}
+
+func (b *ParseScope) transformFunctionIdentComposite(tl *ast.Ident, src *ast.CompositeLit, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (Expr, error) {
+	identObj := b.Info.ObjectOf(tl)
+	identObjType, ok := identObj.Type().(*types.Named)
+	if !ok {
+		return nil, errors.New("ast.Ident for IdentComposite should have types.Named as type")
+	}
+
+	switch base := identObjType.Underlying().(type) {
+	case *types.Map:
+		return b.transformFunctionMapTypeComposite(base, src, bn, fn, others)
+	case *types.Array:
+		return b.transformFunctionArrayTypeComposite(base, src, bn, fn, others)
+	case *types.Slice:
+		return b.transformFunctionSliceTypeComposite(base, src, bn, fn, others)
+	case *types.Struct:
+		return b.transformFunctionStructTypeComposite(base, src, bn, fn, others)
+	}
+
+	return nil, errors.New("types.Ident types.Object.Underlying() for ast.CompositeLit unable to be handled: %#v", identObjType.Underlying())
+}
+
+func (b *ParseScope) transformFunctionSelectorComposite(tl *ast.SelectorExpr, src *ast.CompositeLit, bn *ast.BlockStmt, fn *Function, others map[string]*Package) (Expr, error) {
+	selObj := b.Info.ObjectOf(tl.Sel)
+	selType, ok := selObj.Type().(*types.Named)
+	if !ok {
+		return nil, errors.New("ast.SelectorExpr for SelectorComposite should have types.Named as type")
+	}
+
+	switch base := selType.Underlying().(type) {
+	case *types.Map:
+		return b.transformFunctionMapTypeComposite(base, src, bn, fn, others)
+	case *types.Slice:
+		return b.transformFunctionSliceTypeComposite(base, src, bn, fn, others)
+	case *types.Struct:
+		return b.transformFunctionStructTypeComposite(base, src, bn, fn, others)
+	}
+
+	return nil, errors.New("types.SelectorExpr types.Object.Underlying() for ast.CompositeLit unable to be handled: %#v", selType.Underlying())
 }
 
 //**********************************************************************************
@@ -2819,10 +3405,12 @@ func (b *ParseScope) transformTypeFor(e interface{}, others map[string]*Package)
 		return b.transformInterfaceType(core, others)
 	case *ast.StructType:
 		return b.transformStructType(core, others)
+	case *ast.SliceExpr:
+		return b.transformSliceExpr(core, others)
 	case *types.Struct:
 		return b.transformStruct(core, others)
 	case *ast.BasicLit:
-		return b.transformBasicLitOnly(core, others)
+		return b.transformBasicLit(core, others)
 	case *types.Basic:
 		return b.transformBasic(core, others)
 	case *ast.BinaryExpr:
@@ -2850,7 +3438,7 @@ func (b *ParseScope) transformTypeFor(e interface{}, others map[string]*Package)
 	case *ast.ArrayType:
 		return b.transformArrayType(core, others)
 	case *ast.FuncLit:
-		return b.transformFuncLit(core, others)
+		return b.handleFunctionLit(core, others)
 	case *ast.CompositeLit:
 		return b.transformCompositeLitValue(core, others)
 	case *ast.MapType:
@@ -2981,12 +3569,12 @@ func (b *ParseScope) transformIndexExpr(src *ast.IndexExpr, others map[string]*P
 	}
 	val.Elem = elem
 
-	switch id := src.Index.(type) {
-	case *ast.BasicLit:
-		val.Index = id.Value
-	default:
-		return nil, errors.New("unable to handle index type: %#v", id)
+	indexed, err := b.transformTypeFor(src.Index, others)
+	if err != nil {
+		return nil, err
 	}
+
+	val.Index = indexed
 
 	return &val, nil
 }
@@ -3013,7 +3601,7 @@ func (b *ParseScope) transformCallExpr(src *ast.CallExpr, others map[string]*Pac
 	return &val, nil
 }
 
-func (b *ParseScope) transformBasicLitOnly(e *ast.BasicLit, others map[string]*Package) (*BaseValue, error) {
+func (b *ParseScope) transformBasicLit(e *ast.BasicLit, others map[string]*Package) (*BaseValue, error) {
 	var bm BaseValue
 	bm.Value = e.Value
 	bm.Location = b.getLocation(e.Pos(), e.End())
@@ -3034,7 +3622,7 @@ func (b *ParseScope) getBaseType(name string) (Expr, error) {
 		return BaseFor(name), nil
 	case "uintptr", "uint", "int", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64":
 		return BaseFor(name), nil
-	case "rune", "string":
+	case "byte", "rune", "string":
 		return BaseFor(name), nil
 	case "float32", "float64":
 		return BaseFor(name), nil
@@ -3055,11 +3643,12 @@ func (b *ParseScope) transformIdent(e *ast.Ident, others map[string]*Package) (E
 		return bm, nil
 	}
 
-	bo := b.Info.ObjectOf(e)
-	to := bo.Type()
-	if identity, err := b.identityType(to, others); err == nil {
-		bm, err := b.locateReferencedExpr(identity, others)
-		return bm, err
+	if bo := b.Info.ObjectOf(e); bo != nil {
+		to := bo.Type()
+		if identity, err := b.identityType(to, others); err == nil {
+			bm, err := b.locateReferencedExpr(identity, others)
+			return bm, err
+		}
 	}
 
 	ref := strings.Join([]string{b.From.Name, e.Name}, ".")
@@ -3543,6 +4132,8 @@ func (b *ParseScope) transformNamed(e *types.Named, others map[string]*Package) 
 func (b *ParseScope) transformSignatureWithObject(signature *types.Signature, obj types.Object, others map[string]*Package) (Function, error) {
 	var fn Function
 	fn.IsVariadic = signature.Variadic()
+	fn.Name = String(10)
+	fn.Path = strings.Join([]string{b.From.Name, fn.Name}, ".")
 
 	if params := signature.Results(); params != nil {
 		for i := 0; i < params.Len(); i++ {
@@ -3624,7 +4215,14 @@ func (b *ParseScope) locateReferencedExpr(location typeExpr, others map[string]*
 		return nil, errors.Wrap(ErrNotFound, "unable to find package for %q", location.Package)
 	}
 
-	return targetPackage.GetReferenceByArchs(location.Text, b.Package.Archs, b.Package.Cgo)
+	if found, err := targetPackage.GetReferenceByArchs(location.Text, b.Package.Archs, b.Package.Cgo); err == nil {
+		return found, nil
+	}
+
+	return &UnknownExpr{
+		File:  b.Package,
+		Error: errors.New("unable to locate referenced type: %#v", location),
+	}, nil
 }
 
 func (b *ParseScope) locateInterfaceWithObject(e *types.Interface, named *types.Named, obj types.Object, others map[string]*Package) (Expr, error) {
@@ -3706,12 +4304,10 @@ func (b *ParseScope) transformInterfaceWithNamed(e *types.Interface, named *type
 	return declr, nil
 }
 
-func (b *ParseScope) transformFuncLit(e *ast.FuncLit, others map[string]*Package) (Function, error) {
-	return b.handleFunctionLit(e)
-}
-
 func (b *ParseScope) transformInterfaceType(e *ast.InterfaceType, others map[string]*Package) (*Interface, error) {
 	var declr Interface
+	declr.Name = String(10)
+	declr.Path = strings.Join([]string{b.From.Name, declr.Name}, ".")
 	declr.Methods = map[string]*Function{}
 
 	// read location information(line, column, source text etc) for giving type.
@@ -3723,14 +4319,14 @@ func (b *ParseScope) transformInterfaceType(e *ast.InterfaceType, others map[str
 
 	for _, field := range e.Methods.List {
 		if len(field.Names) == 0 {
-			if err := b.handleEmbeddedInterface("interface", field, field.Type, others, &declr); err != nil {
+			if err := b.handleEmbeddedInterface(declr.Name, field, field.Type, others, &declr); err != nil {
 				return nil, err
 			}
 			continue
 		}
 
 		for _, name := range field.Names {
-			fn, err := b.handleFunctionFieldWithName("interface", field, name, field.Type)
+			fn, err := b.handleFunctionFieldWithName(declr.Name, field, name, field.Type)
 			if err != nil {
 				return nil, err
 			}
@@ -3748,6 +4344,8 @@ func (b *ParseScope) transformInterfaceType(e *ast.InterfaceType, others map[str
 func (b *ParseScope) transformStructType(e *ast.StructType, others map[string]*Package) (*Struct, error) {
 	var declr Struct
 	declr.Fields = map[string]Field{}
+	declr.Name = String(10)
+	declr.Path = strings.Join([]string{b.From.Name, declr.Name}, ".")
 
 	// read location information(line, column, source text etc) for giving type.
 	declr.Location = b.getLocation(e.Pos(), e.End())
@@ -3758,7 +4356,7 @@ func (b *ParseScope) transformStructType(e *ast.StructType, others map[string]*P
 
 	for _, field := range e.Fields.List {
 		if len(field.Names) == 0 {
-			parsedField, err := b.handleField("struct", field, field.Type)
+			parsedField, err := b.handleField(declr.Name, field, field.Type)
 			if err != nil {
 				return nil, err
 			}
@@ -3772,7 +4370,7 @@ func (b *ParseScope) transformStructType(e *ast.StructType, others map[string]*P
 		}
 
 		for _, fieldName := range field.Names {
-			parsedField, err := b.handleFieldWithName("struct", field, fieldName, field.Type)
+			parsedField, err := b.handleFieldWithName(declr.Name, field, fieldName, field.Type)
 			if err != nil {
 				return nil, err
 			}
@@ -3817,6 +4415,47 @@ func (b *ParseScope) transformArrayType(e *ast.ArrayType, others map[string]*Pac
 	return &declr, err
 }
 
+func (b *ParseScope) transformSliceExpr(e *ast.SliceExpr, others map[string]*Package) (*SliceExpr, error) {
+	var declr SliceExpr
+	declr.Location = b.getLocation(e.Pos(), e.End())
+
+	target, err := b.transformTypeFor(e.X, others)
+	if err != nil {
+		return nil, err
+	}
+
+	declr.Target = target
+
+	if e.Low != nil {
+		max, cerr := b.transformTypeFor(e.Max, others)
+		if cerr != nil {
+			return nil, cerr
+		}
+
+		declr.Max = max
+	}
+
+	if e.Low != nil {
+		lowest, cerr := b.transformTypeFor(e.Low, others)
+		if cerr != nil {
+			return nil, cerr
+		}
+
+		declr.Lowest = lowest
+	}
+
+	if e.High != nil {
+		highest, cerr := b.transformTypeFor(e.High, others)
+		if cerr != nil {
+			return nil, cerr
+		}
+
+		declr.Highest = highest
+	}
+
+	return &declr, err
+}
+
 func (b *ParseScope) transformChanType(e *ast.ChanType, others map[string]*Package) (*Channel, error) {
 	var err error
 	var declr Channel
@@ -3845,6 +4484,89 @@ func (b *ParseScope) transformMapType(e *ast.MapType, others map[string]*Package
 	return &declr, nil
 }
 
+func (b *ParseScope) transformFuncType(e *ast.FuncType, others map[string]*Package) (*Function, error) {
+	var declr Function
+	declr.Name = String(10)
+	declr.Path = strings.Join([]string{b.From.Name, declr.Name}, ".")
+
+	// read location information(line, column, source text etc) for giving type.
+	declr.Location = b.getLocation(e.Pos(), e.End())
+
+	if e.Params != nil {
+		var params []Parameter
+		for _, param := range e.Params.List {
+			if len(param.Names) == 0 {
+				p, err := b.handleParameter("func", param, param.Type)
+				if err != nil {
+					return nil, err
+				}
+
+				if err = p.Resolve(others); err != nil {
+					return nil, err
+				}
+
+				params = append(params, p)
+				continue
+			}
+
+			// If we have name as a named parameter or named return then
+			// appropriately
+			for _, name := range param.Names {
+				p, err := b.handleParameterWithName("func", param, name, param.Type)
+				if err != nil {
+					return nil, err
+				}
+
+				if err = p.Resolve(others); err != nil {
+					return nil, err
+				}
+
+				params = append(params, p)
+			}
+		}
+
+		declr.Arguments = params
+	}
+
+	if e.Results != nil {
+		var params []Parameter
+		for _, param := range e.Params.List {
+			if len(param.Names) == 0 {
+				p, err := b.handleParameter("func", param, param.Type)
+				if err != nil {
+					return nil, err
+				}
+
+				if err = p.Resolve(others); err != nil {
+					return nil, err
+				}
+
+				params = append(params, p)
+				continue
+			}
+
+			// If we have name as a named parameter or named return then
+			// appropriately
+			for _, name := range param.Names {
+				p, err := b.handleParameterWithName("func", param, name, param.Type)
+				if err != nil {
+					return nil, err
+				}
+
+				if err = p.Resolve(others); err != nil {
+					return nil, err
+				}
+
+				params = append(params, p)
+			}
+		}
+
+		declr.Returns = params
+	}
+
+	return &declr, nil
+}
+
 func (b *ParseScope) transformPointer(e *types.Pointer, others map[string]*Package) (*Pointer, error) {
 	var err error
 	var declr Pointer
@@ -3855,6 +4577,8 @@ func (b *ParseScope) transformPointer(e *types.Pointer, others map[string]*Packa
 func (b *ParseScope) transformSignature(signature *types.Signature, others map[string]*Package) (*Function, error) {
 	var fn Function
 	fn.IsVariadic = signature.Variadic()
+	fn.Name = String(10)
+	fn.Path = strings.Join([]string{b.From.Name, fn.Name}, ".")
 
 	if params := signature.Results(); params != nil {
 		for i := 0; i < params.Len(); i++ {
@@ -3943,6 +4667,8 @@ func (b *ParseScope) transformStruct(e *types.Struct, others map[string]*Package
 	}
 
 	var declr Struct
+	declr.Name = String(10)
+	declr.Path = strings.Join([]string{b.From.Name, declr.Name}, ".")
 	declr.Fields = map[string]Field{}
 
 	for i := 0; i < e.NumFields(); i++ {
@@ -3972,6 +4698,8 @@ func (b *ParseScope) transformInterface(e *types.Interface, others map[string]*P
 	}
 
 	var declr Interface
+	declr.Name = String(10)
+	declr.Path = strings.Join([]string{b.From.Name, declr.Name}, ".")
 	declr.Methods = map[string]*Function{}
 
 	for i := 0; i < e.NumMethods(); i++ {
@@ -4021,87 +4749,6 @@ func (b *ParseScope) transformFunc(e *types.Func, others map[string]*Package) (*
 	return fn, nil
 }
 
-func (b *ParseScope) transformFuncType(e *ast.FuncType, others map[string]*Package) (*Function, error) {
-	var declr Function
-
-	// read location information(line, column, source text etc) for giving type.
-	declr.Location = b.getLocation(e.Pos(), e.End())
-
-	if e.Params != nil {
-		var params []Parameter
-		for _, param := range e.Params.List {
-			if len(param.Names) == 0 {
-				p, err := b.handleParameter("func", param, param.Type)
-				if err != nil {
-					return nil, err
-				}
-
-				if err = p.Resolve(others); err != nil {
-					return nil, err
-				}
-
-				params = append(params, p)
-				continue
-			}
-
-			// If we have name as a named parameter or named return then
-			// appropriately
-			for _, name := range param.Names {
-				p, err := b.handleParameterWithName("func", param, name, param.Type)
-				if err != nil {
-					return nil, err
-				}
-
-				if err = p.Resolve(others); err != nil {
-					return nil, err
-				}
-
-				params = append(params, p)
-			}
-		}
-
-		declr.Arguments = params
-	}
-
-	if e.Results != nil {
-		var params []Parameter
-		for _, param := range e.Params.List {
-			if len(param.Names) == 0 {
-				p, err := b.handleParameter("func", param, param.Type)
-				if err != nil {
-					return nil, err
-				}
-
-				if err = p.Resolve(others); err != nil {
-					return nil, err
-				}
-
-				params = append(params, p)
-				continue
-			}
-
-			// If we have name as a named parameter or named return then
-			// appropriately
-			for _, name := range param.Names {
-				p, err := b.handleParameterWithName("func", param, name, param.Type)
-				if err != nil {
-					return nil, err
-				}
-
-				if err = p.Resolve(others); err != nil {
-					return nil, err
-				}
-
-				params = append(params, p)
-			}
-		}
-
-		declr.Returns = params
-	}
-
-	return &declr, nil
-}
-
 func (b *ParseScope) transformSelectorExpr(parent *ast.SelectorExpr, others map[string]*Package) (Expr, error) {
 	switch tx := parent.X.(type) {
 	case *ast.CompositeLit:
@@ -4143,7 +4790,6 @@ func (b *ParseScope) transformSelectorWithComposite(cp *ast.CompositeLit, e *ast
 
 		return b.locateRefFromObject([]string{e.Sel.Name}, element, others)
 	case *ast.SelectorExpr:
-		fmt.Printf("Attempting to target another selector: %#v\n", baseTarget)
 		element, err := b.transformTypeFor(baseTarget, others)
 		if err != nil {
 			return nil, err
@@ -4191,15 +4837,15 @@ func (b *ParseScope) transformSelectorExprWithIdent(me *ast.Ident, e *ast.Select
 		}
 	}
 
-	fmt.Printf("Next::SelectorProcessing[%q][%q] -> %#v\n", b.From.Name, me.Name, e.Sel)
+	ref := strings.Join([]string{b.From.Name, me.Name}, ".")
+	if target, err := b.From.GetReferenceByArchs(ref, b.Package.Archs, b.Package.Cgo); err == nil {
+		return target, nil
+	}
 
-	fmt.Printf("Selector[%q][%q] -> %#v -> %q\n", b.From.Name, me.Name, me.Obj, e.Sel)
-
-	//if targetRef, err := b.findWithinPackage(ref, b.From); err == nil {
-	//	return b.locateRefFromObject([]string{selObj.Name()}, targetRef, others)
-	//}
-
-	return nil, errors.New("unable to find selector target: %q", me.Name)
+	return &UnknownExpr{
+		Error: errors.New("unable to locate reference %q", ref),
+		File:  b.Package,
+	}, nil
 }
 
 func (b *ParseScope) getElementFromPackageWithObject(target *ast.Ident) (Expr, error) {
@@ -4233,7 +4879,7 @@ func (b *ParseScope) getElementFromPackageWithObject(target *ast.Ident) (Expr, e
 }
 
 func (b *ParseScope) transformSelectorExprWithSelector(next *ast.SelectorExpr, parent *ast.SelectorExpr, others map[string]*Package) (Expr, error) {
-	parts, err := b.getSelectorTree(nil, next, parent, others)
+	parts, lastX, err := b.getSelectorTree(nil, next, parent, others)
 	if err != nil {
 		return nil, err
 	}
@@ -4245,11 +4891,31 @@ func (b *ParseScope) transformSelectorExprWithSelector(next *ast.SelectorExpr, p
 
 	// Are we dealing with an internal package object (variable, struct, interface, function) ?
 	ref := strings.Join([]string{b.From.Name, parts[0]}, ".")
-	if targetRef, err := b.From.GetReferenceByArchs(ref, b.Package.Archs, b.Package.Cgo); err == nil {
-		return b.locateRefFromObject(parts[1:], targetRef, others)
+	targetRef, err := b.From.GetReferenceByArchs(ref, b.Package.Archs, b.Package.Cgo)
+	if err != nil {
+		return nil, errors.Wrap(err, "unable to find import with alias %q", parts[0])
 	}
 
-	return nil, errors.New("unable to find import with alias %q", parts[0])
+	pelem, err := b.locateRefFromObject(parts[1:], targetRef, others)
+	if err != nil {
+		return nil, err
+	}
+
+	if lastX == nil {
+		return pelem, nil
+	}
+
+	procElem, err := b.transformTypeFor(lastX.X, others)
+	if err != nil {
+		return nil, err
+	}
+
+	derivedElem, err := b.locateRefFromObject([]string{lastX.Sel.Name}, procElem, others)
+	if err != nil {
+		return nil, err
+	}
+
+	return derivedElem, nil
 }
 
 func (b *ParseScope) getImportFromAlias(aliasName string, others map[string]*Package) (Import, error) {
@@ -4268,7 +4934,7 @@ func (b *ParseScope) getPackageFromAlias(aliasName string, others map[string]*Pa
 	return nil, errors.New("unable to find import package for alias %q", aliasName)
 }
 
-func (b *ParseScope) getSelectorTree(parts []string, next *ast.SelectorExpr, parent *ast.SelectorExpr, others map[string]*Package) ([]string, error) {
+func (b *ParseScope) getSelectorTree(parts []string, next *ast.SelectorExpr, parent *ast.SelectorExpr, others map[string]*Package) ([]string, *ast.SelectorExpr, error) {
 	if parent.Sel != nil {
 		parts = append(parts, parent.Sel.Name)
 	}
@@ -4282,8 +4948,10 @@ func (b *ParseScope) getSelectorTree(parts []string, next *ast.SelectorExpr, par
 	}
 
 	nextIdent, ok := next.X.(*ast.Ident)
+
+	// if it's not then we stop here.
 	if !ok {
-		return parts, errors.New("expected ast.Selector.X value to be ast.Ident for last one: %T", next.X)
+		return parts, next, nil
 	}
 
 	// finally add the target name of expected next selector as the ast is done reverse.
@@ -4293,7 +4961,7 @@ func (b *ParseScope) getSelectorTree(parts []string, next *ast.SelectorExpr, par
 		tmp := parts[0]
 		parts[0] = parts[1]
 		parts[1] = tmp
-		return parts, nil
+		return parts, nil, nil
 	}
 
 	partLen := len(parts)
@@ -4306,7 +4974,7 @@ func (b *ParseScope) getSelectorTree(parts []string, next *ast.SelectorExpr, par
 		parts[partRLen-i] = base
 	}
 
-	return parts, nil
+	return parts, nil, nil
 }
 
 func (b *ParseScope) locateRefFromPathSeries(parts []string, pkg string, others map[string]*Package) (Expr, error) {
@@ -4321,7 +4989,10 @@ func (b *ParseScope) locateRefFromPathSeries(parts []string, pkg string, others 
 func (b *ParseScope) locateRefFromObject(parts []string, target Expr, others map[string]*Package) (Expr, error) {
 	if target == nil {
 		//return nil, errors.New("targets %q can not be nil", parts)
-		return &UnknownExpr{}, nil
+		return &UnknownExpr{
+			File:  b.Package,
+			Error: errors.New("targets %q can not be nil", parts),
+		}, nil
 	}
 
 	if len(parts) == 0 {
@@ -4334,13 +5005,13 @@ func (b *ParseScope) locateRefFromObject(parts []string, target Expr, others map
 	case *Value:
 		return b.locateRefFromObject(parts[1:], item.Value, others)
 	case *Key:
-		return b.locateRefFromObject(parts[1:], item.Type, others)
+		return b.locateRefFromObject(parts, item.Type, others)
 	case *Pointer:
-		return b.locateRefFromObject(parts[1:], item.Elem, others)
-	case Parameter:
-		return b.locateRefFromObject(parts[1:], item.Type, others)
+		return b.locateRefFromObject(parts, item.Elem, others)
 	case *ParenExpr:
 		return b.locateRefFromObject(parts, item.Elem, others)
+	case Parameter:
+		return b.locateRefFromObject(parts[1:], item.Type, others)
 	case *Parameter:
 		return b.locateRefFromObject(parts[1:], item.Type, others)
 	case Field:
@@ -4349,6 +5020,9 @@ func (b *ParseScope) locateRefFromObject(parts []string, target Expr, others map
 		return b.locateRefFromObject(parts[1:], item.Type, others)
 	case *Interface:
 		if fn, ok := item.Methods[parts[0]]; ok {
+			return b.locateRefFromObject(parts[1:], fn, others)
+		}
+		if fn, ok := item.Composes[parts[0]]; ok {
 			return b.locateRefFromObject(parts[1:], fn, others)
 		}
 		//return nil, errors.New("unable to locate giving method from interface: %+q", parts)
@@ -4382,7 +5056,10 @@ func (b *ParseScope) locateRefFromObject(parts []string, target Expr, others map
 	}
 
 	//return nil, errors.New("unable to locate any of provided set %+q in %T", parts, target)
-	return &UnknownExpr{}, nil
+	return &UnknownExpr{
+		File:  b.Package,
+		Error: errors.New("unable to locate any of provided set %+q in %T", parts, target),
+	}, nil
 }
 
 func (b *ParseScope) locateRefFromPackage(target string, pkg string, others map[string]*Package) (Expr, error) {

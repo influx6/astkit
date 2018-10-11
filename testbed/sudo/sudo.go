@@ -275,8 +275,13 @@ func (f Function) hello(n string, v, u string, m int) {
 		}
 	}
 
+	var momo = func(m string) {
+		fmt.Printf("Bog: %q : %+q", m, bu)
+	}
+
 	mx := bu[0:]
 	fmt.Printf("Bog: %q", mx)
+	momo("wr")
 }
 
 // Functioner interface

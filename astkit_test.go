@@ -10,8 +10,13 @@ import (
 )
 
 func TestTransform(t *testing.T) {
-	pkg, others, err := astkit.Transform(context.Background(), "github.com/gokit/astkit/testbed/sudo")
+	sudo, others, err := astkit.Transform(context.Background(), "github.com/gokit/astkit/testbed/sudo")
 	assert.NoError(t, err)
-	assert.NotNil(t, pkg)
+	assert.NotNil(t, sudo)
 	assert.NotNil(t, others)
+	assert.NotNil(t, others["fmt"])
+	assert.NotNil(t, others["runtime"])
+	assert.NotNil(t, others["github.com/gokit/astkit/testbed/sudo"])
+	assert.NotNil(t, others["github.com/gokit/astkit/testbed/sudo/api"])
+
 }
