@@ -11,6 +11,7 @@ import (
 	"os"
 
 	"github.com/gokit/astkit/internal/runtime"
+	"github.com/gokit/errors"
 	"golang.org/x/tools/go/loader"
 )
 
@@ -51,10 +52,6 @@ type Cg struct {
 	// exists.
 	Errors bool
 
-	// Build defines the build context to be used for parsing
-	// package files.
-	Build *build.Context
-
 	// WithTests indicate if tests for the main
 	// package should be loaded.
 	WithTests bool
@@ -83,6 +80,9 @@ type Cg struct {
 	// from Golang defined layout. If an error is returned then fallback
 	// is done to use build.Context.Import.
 	Importer func(ctx *build.Context, importPath string, fromDir string, mode build.ImportMode) (*build.Package, error)
+
+	// ErrorCheck sets the function to be provided to the type checker.
+	ErrorCheck func(error)
 
 	// AfterTypeCheck provides a hook to listen for latest files added after
 	// parser has finished type checking for a giving package.
@@ -119,24 +119,30 @@ func (cg Cg) Import(ctxt *build.Context, importPath, fromDir string, mode build.
 // Load takes a giving package path which it parses
 // returning a structure containing all related filesets
 // and parsed AST.
-func Load(pkg string, c Cg) (*loader.Program, error) {
+func Load(c Cg, pkg string, arch string, goos string) (*loader.Program, error) {
 	if err := c.init(); err != nil {
 		return nil, err
 	}
 
-	mybuild := c.Build
-	if c.Build == nil {
-		bo := build.Default
-		bo.GOPATH = c.GoPath
-		bo.GOROOT = c.GoRuntime
-		mybuild = &bo
+	if arch == "" {
+		return nil, errors.New("arch must be supplied")
+	}
+
+	mybuild := build.Default
+	mybuild.GOARCH = arch
+	mybuild.GOPATH = c.GoPath
+	mybuild.GOROOT = c.GoRuntime
+
+	if goos != "" {
+		mybuild.GOOS = goos
 	}
 
 	var lconfig loader.Config
-	lconfig.Build = mybuild
+	lconfig.Build = &mybuild
 	lconfig.Cwd = c.PackageDir
 	lconfig.AllowErrors = c.Errors
 	lconfig.FindPackage = c.Import
+	lconfig.TypeChecker.Error = c.ErrorCheck
 	lconfig.AfterTypeCheck = c.AfterTypeCheck
 	lconfig.ParserMode = parser.ParseComments
 

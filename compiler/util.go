@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go/ast"
 	"math/rand"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -52,8 +53,8 @@ var (
 	annotation = regexp.MustCompile("@(\\w+(:\\w+)?)(\\([.\\s\\S]+\\))?")
 )
 
-// GetTags returns all associated tag within provided string.
-func GetTags(content string) []Tag {
+// getTags returns all associated tag within provided string.
+func getTags(content string) []Tag {
 	var tags []Tag
 	cleaned := moreSpaces.ReplaceAllString(content, " ")
 	for _, tag := range strings.Split(cleaned, " ") {
@@ -72,6 +73,196 @@ func GetTags(content string) []Tag {
 		})
 	}
 	return tags
+}
+
+const (
+	goosList   = "android darwin dragonfly freebsd js linux nacl netbsd openbsd plan9 solaris windows zos"
+	goarchList = "386 amd64 amd64p32 arm armbe arm64 arm64be ppc64 ppc64le mips mipsle mips64 mips64le mips64p32 mips64p32le ppc riscv riscv64 s390 s390x sparc sparc64 wasm"
+)
+
+var (
+	archLists = []string{
+		"386",
+		"amd64",
+		"amd64p32",
+		"arm",
+		"armbe",
+		"arm64",
+		"arm64be",
+		"ppc",
+		"ppc64",
+		"ppc64le",
+		"mips",
+		"mipsle",
+		"mips64",
+		"mipsx",
+		"mipsx64",
+		"mips64le",
+		"mips64p32",
+		"mips64p32le",
+		"riscv",
+		"riscv64",
+		"s390",
+		"s390x",
+		"sparc",
+		"sparc64",
+		"wasm",
+	}
+
+	basicArchLists = []string{
+		"386",
+		"amd64",
+		"arm",
+		"arm64",
+		"wasm",
+	}
+
+	nativelySupportedArchLists = []string{
+		"386",
+		"amd64",
+		"amd64p32",
+		"arm",
+		"arm64",
+		"ppc64",
+		"ppc64le",
+		"mips",
+		"mipsle",
+		"mips64",
+		"mips64le",
+		"s390x",
+		"wasm",
+	}
+
+	archs = map[string]bool{
+		"386":         true,
+		"amd64":       true,
+		"amd64p32":    true,
+		"arm":         true,
+		"armbe":       true,
+		"arm64":       true,
+		"arm64be":     true,
+		"ppc":         true,
+		"ppc64":       true,
+		"ppc64le":     true,
+		"mips":        true,
+		"mipsle":      true,
+		"mips64":      true,
+		"mipsx":       true,
+		"mipsx64":     true,
+		"mips64le":    true,
+		"mips64p32":   true,
+		"mips64p32le": true,
+		"riscv":       true,
+		"riscv64":     true,
+		"s390":        true,
+		"s390x":       true,
+		"sparc":       true,
+		"sparc64":     true,
+		"wasm":        true,
+	}
+
+	basicPlatformLists = []string{
+		"linux",
+		"darwin",
+		"windows",
+	}
+
+	platformLists = []string{
+		"zos",
+		"nacl",
+		"linux",
+		"plan9",
+		"netbsd",
+		"darwin",
+		"openbsd",
+		"solaris",
+		"windows",
+		"android",
+		"freebsd",
+		"dragonfly",
+	}
+
+	nativelySupportedPlatformLists = []string{
+		"nacl",
+		"linux",
+		"plan9",
+		"netbsd",
+		"darwin",
+		"openbsd",
+		"solaris",
+		"windows",
+		"freebsd",
+		"dragonfly",
+	}
+
+	platforms = map[string]bool{
+		"js":        true,
+		"zos":       true,
+		"nacl":      true,
+		"linux":     true,
+		"plan9":     true,
+		"netbsd":    true,
+		"darwin":    true,
+		"openbsd":   true,
+		"solaris":   true,
+		"windows":   true,
+		"android":   true,
+		"freebsd":   true,
+		"dragonfly": true,
+	}
+)
+
+func getPlatformArchitecture(v string) (platform string, arch string) {
+	v = strings.Replace(v, filepath.Ext(v), "", -1)
+
+	parts := strings.Split(v, "_")
+	total := len(parts)
+
+	if total == 0 {
+		return
+	}
+
+	if total == 1 {
+		return
+	}
+
+	var area []string
+
+	if total > 3 {
+		area = parts[total-3:]
+	}
+
+	if total == 3 {
+		area = parts[total-2:]
+	}
+
+	if total == 2 {
+		area = parts[total-1:]
+	}
+
+	if len(area) > 1 {
+		if platforms[area[0]] {
+			platform = area[0]
+		}
+
+		if archs[area[1]] {
+			arch = area[1]
+		}
+
+		return
+	}
+
+	if platforms[area[0]] {
+		platform = area[0]
+		return
+	}
+
+	if archs[area[0]] {
+		arch = area[0]
+		return
+	}
+
+	return
 }
 
 func getExprName(n interface{}) (string, error) {

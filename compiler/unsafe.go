@@ -202,7 +202,9 @@ var (
 	}
 
 	unsafePackage = &Package{
-		Name: "unsafe",
+		Name:           "unsafe",
+		CgoPackages:    NewArchs(),
+		NormalPackages: NewArchs(),
 		Functions: map[string]*Function{
 			"unsafe.Sizeof":   unsafeSizeOf,
 			"unsafe.Offsetof": unsafeOffset,

@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"github.com/gokit/errors"
-	"golang.org/x/tools/go/loader"
 )
 
 // ExprType defines a int type used to represent giving
@@ -69,6 +68,811 @@ type ExprSymbol interface {
 // an error.
 type ResolverFn func(map[string]*Package) error
 
+// PackageFile defines a giving package file with it's associated
+// definitions, constructs and declarations. It provides the
+// one-to-one relation of a parsed package.
+type PackageFile struct {
+	Name      string
+	File      string
+	Dir       string
+	Docs      []Doc
+	Cgo       bool
+	Archs     map[string]bool
+	Platforms map[string]bool
+	Imports   map[string]Import
+}
+
+// HasPlatform returns true/false if giving platform is supported.
+func (l *PackageFile) HasPlatform(plat string) bool {
+	return l.Platforms[plat]
+}
+
+// HasPlatform returns true/false if giving arch is supported.
+func (l *PackageFile) HasArch(arch string) bool {
+	return l.Archs[arch]
+}
+
+// IsCgoSpecific returns true/false if giving location data is cgo based.
+func (l *PackageFile) IsCgoSpecific() bool {
+	return l.Cgo
+}
+
+// IsArchSpecific returns true/false if giving location data is architecture constraints.
+func (l *PackageFile) IsArchSpecific() bool {
+	return len(l.Archs) != 0
+}
+
+// IsPlatformSpecific returns true/false if giving location data is platform specific.
+func (l *PackageFile) IsPlatformSpecific() bool {
+	return len(l.Platforms) != 0
+}
+
+// PlatformPackage provides a package-grouping around a giving class/group value.
+// It allows grouping types specific to a platform within a package.
+type PlatformPackage struct {
+	Name     string
+	Platform string
+
+	NoNameStructs    []*Struct
+	Variables        map[string]*Variable
+	Constants        map[string]*Variable
+	Types            map[string]*Type
+	Structs          map[string]*Struct
+	Interfaces       map[string]*Interface
+	Functions        map[string]*Function
+	Methods          map[string]*Function
+	MethodByReceiver map[string]*Function
+	Scopes           map[string]FunctionScope
+}
+
+// Platform returns a new instance of PlatformPackage.
+func Platform(platform string, pkg string) *PlatformPackage {
+	return &PlatformPackage{
+		Name:             pkg,
+		Platform:         platform,
+		Types:            map[string]*Type{},
+		Structs:          map[string]*Struct{},
+		Variables:        map[string]*Variable{},
+		Constants:        map[string]*Variable{},
+		Functions:        map[string]*Function{},
+		Methods:          map[string]*Function{},
+		MethodByReceiver: map[string]*Function{},
+		Interfaces:       map[string]*Interface{},
+		Scopes:           map[string]FunctionScope{},
+	}
+}
+
+// GetConstant attempts to return Constant reference declared in Package.
+func (p *PlatformPackage) GetConstant(addr string) (*Variable, error) {
+	if method, ok := p.Constants[addr]; ok {
+		return method, nil
+	}
+	return nil, errors.Wrap(ErrNotFound, "Constant with addrs %q not found", addr)
+}
+
+// GetReference returns giving Expr which matches giving reference.
+func (p *PlatformPackage) GetReference(ref string) (Expr, error) {
+	if target, ok := p.Structs[ref]; ok {
+		return target, nil
+	}
+
+	if target, ok := p.Types[ref]; ok {
+		return target, nil
+	}
+
+	if target, ok := p.Interfaces[ref]; ok {
+		return target, nil
+	}
+
+	if target, ok := p.Functions[ref]; ok {
+		return target, nil
+	}
+
+	if target, ok := p.Variables[ref]; ok {
+		return target, nil
+	}
+
+	if target, ok := p.Constants[ref]; ok {
+		return target, nil
+	}
+
+	if target, ok := p.Methods[ref]; ok {
+		return target, nil
+	}
+
+	return nil, errors.Wrap(ErrNotFound, "reference %q not found in %q", ref, p.Name)
+}
+
+// GetVariable attempts to return Variable reference declared in Package.
+func (p *PlatformPackage) GetVariable(addr string) (*Variable, error) {
+	if method, ok := p.Variables[addr]; ok {
+		return method, nil
+	}
+	return nil, errors.Wrap(ErrNotFound, "Variable with addrs %q not found", addr)
+}
+
+// GetType attempts to return Type reference declared in Package.
+func (p *PlatformPackage) GetType(addr string) (*Type, error) {
+	if method, ok := p.Types[addr]; ok {
+		return method, nil
+	}
+	return nil, errors.Wrap(ErrNotFound, "Type with addrs %q not found", addr)
+}
+
+// GetStruct attempts to return Struct reference declared in Package.
+func (p *PlatformPackage) GetStruct(addr string) (*Struct, error) {
+	if method, ok := p.Structs[addr]; ok {
+		return method, nil
+	}
+	return nil, errors.Wrap(ErrNotFound, "Struct with addrs %q not found", addr)
+}
+
+// GetInterface attempts to return interface reference declared in Package.
+func (p *PlatformPackage) GetInterface(addr string) (*Interface, error) {
+	if method, ok := p.Interfaces[addr]; ok {
+		return method, nil
+	}
+	return nil, errors.Wrap(ErrNotFound, "Interface with addrs %q not found", addr)
+}
+
+// GetFunctionFor attempts to return Function reference for giving package function declared
+// in Package, from Package.Functions dictionary.
+func (p *PlatformPackage) GetFunctionFor(addr string) (*Function, error) {
+	if method, ok := p.Functions[addr]; ok {
+		return method, nil
+	}
+	return nil, errors.Wrap(ErrNotFound, "function with addrs %q not found", addr)
+}
+
+// GetMethodFor attempts to return Function reference for giving method associated
+// with type from Package.Methods dictionary.
+func (p *PlatformPackage) GetMethodFor(addr string) (*Function, error) {
+	if method, ok := p.Methods[addr]; ok {
+		return method, nil
+	}
+	return nil, errors.Wrap(ErrNotFound, "method with addrs %q not found", addr)
+}
+
+func (p *PlatformPackage) addFunction(elem *Function) error {
+	if elem.IsMethod {
+		p.Methods[elem.Addr()] = elem
+
+		// If it has a receiver instance name then add to methods with receivers.
+		if elem.ReceiverName != "" {
+			p.MethodByReceiver[elem.ReceiverAddr] = elem
+		}
+
+		return nil
+	}
+
+	p.Functions[elem.Addr()] = elem
+	return nil
+}
+
+func (p *PlatformPackage) addType(elem *Type) error {
+	p.Types[elem.Addr()] = elem
+	return nil
+}
+
+func (p *PlatformPackage) addStruct(elem *Struct) error {
+	if elem.Name == "" {
+		p.NoNameStructs = append(p.NoNameStructs, elem)
+		return nil
+	}
+	p.Structs[elem.Addr()] = elem
+	return nil
+}
+
+func (p *PlatformPackage) addInterface(elem *Interface) error {
+	p.Interfaces[elem.Addr()] = elem
+	return nil
+}
+
+func (p *PlatformPackage) addVariable(elem *Variable) error {
+	if elem.Constant {
+		p.Constants[elem.Addr()] = elem
+		return nil
+	}
+
+	p.Variables[elem.Addr()] = elem
+	return nil
+}
+
+// Archs contains a map for PlatformPackages organized
+// for access.
+type Archs struct {
+	Archs     map[string]*PlatformPackage
+	Platforms map[string]*PlatformPackage
+}
+
+// NewArchs returns a new instance of Archs.
+func NewArchs() *Archs {
+	return &Archs{
+		Archs:     map[string]*PlatformPackage{},
+		Platforms: map[string]*PlatformPackage{},
+	}
+}
+
+// GetArch returns a new Platform package for a giving platform.
+func (p *Archs) GetPlatform(platform string, name string) *PlatformPackage {
+	if archPackage, ok := p.Archs[platform]; ok {
+		return archPackage
+	}
+
+	platfm := Platform(platform, name)
+	p.Platforms[platform] = platfm
+	return platfm
+}
+
+// GetArch returns a new Platform package for a giving architecture.
+func (p *Archs) GetArch(arch string, name string) *PlatformPackage {
+	if archPackage, ok := p.Archs[arch]; ok {
+		return archPackage
+	}
+	platfm := Platform(arch, name)
+	p.Archs[arch] = platfm
+	return platfm
+}
+
+// GetReferenceArchs returns giving Expr which matches giving reference for a set of architectures.
+// If non is found, then we check the platforms else return ErrNotFound.
+func (p *Archs) GetReferenceByArchs(ref string, archs map[string]bool) (Expr, error) {
+	for k := range archs {
+		if plat, ok := p.Archs[k]; ok {
+			if pm, err := plat.GetReference(ref); err == nil {
+				return pm, nil
+			}
+		}
+	}
+
+	for _, pkg := range p.Platforms {
+		if pm, err := pkg.GetReference(ref); err == nil {
+			return pm, nil
+		}
+	}
+
+	return nil, ErrNotFound
+}
+
+// GetReference returns giving Expr which matches giving reference.
+// If non is found, then we check the platforms else return ErrNotFound.
+func (p *Archs) GetReference(ref string) (Expr, error) {
+	for _, pkg := range p.Archs {
+		if pm, err := pkg.GetReference(ref); err == nil {
+			return pm, nil
+		}
+	}
+
+	for _, pkg := range p.Platforms {
+		if pm, err := pkg.GetReference(ref); err == nil {
+			return pm, nil
+		}
+	}
+
+	return nil, ErrNotFound
+}
+
+// Package embodies a parsed Golang/Go based package,
+// with it's information and package files, which embody
+// it's declarations, types and constructs.
+type Package struct {
+	Name      string
+	Docs      []Doc
+	BadDeclrs []*BadExpr
+	Depends   []*Package
+
+	// CgoPackages holds architecture and platform specific types
+	// and declarations for cgo based types.
+	CgoPackages *Archs
+
+	// NormalPackages holds architecture and platform specific types
+	// and declarations for non-cgo based types.
+	NormalPackages *Archs
+
+	// All architecture allowed types and variables.
+	Blanks           []*Variable
+	NoNameStructs    []*Struct
+	Variables        map[string]*Variable
+	Constants        map[string]*Variable
+	Types            map[string]*Type
+	Structs          map[string]*Struct
+	Interfaces       map[string]*Interface
+	Functions        map[string]*Function
+	Methods          map[string]*Function
+	MethodByReceiver map[string]*Function
+	Files            map[string]*PackageFile
+	Scopes           map[string]FunctionScope
+
+	// set of resolvers which are layered out in
+	// order of calling. Block resolvers must be resolved
+	// last as they could use variables and variables resolvers
+	// must be resolved as they could refer to a struct
+	// field type.
+	baseResolvers  []Resolvable
+	namedResolvers []Resolvable
+	varResolvers   []Resolvable
+	blockResolvers []Resolvable
+	postResolvers  []ResolverFn
+	resolved       bool
+}
+
+// GetConstant attempts to return Constant reference declared in Package.
+func (p *Package) GetConstant(methodName string) (*Variable, error) {
+	points := []string{p.Name, methodName}
+	addr := strings.Join(points, ".")
+	if method, ok := p.Constants[addr]; ok {
+		return method, nil
+	}
+
+	return nil, errors.Wrap(ErrNotFound, "Constant with addrs %q not found", addr)
+}
+
+// GetVariable attempts to return Variable reference declared in Package.
+func (p *Package) GetVariable(methodName string) (*Variable, error) {
+	points := []string{p.Name, methodName}
+	addr := strings.Join(points, ".")
+	if method, ok := p.Variables[addr]; ok {
+		return method, nil
+	}
+	return nil, errors.Wrap(ErrNotFound, "Variable with addrs %q not found", addr)
+}
+
+// GetType attempts to return Type reference declared in Package.
+func (p *Package) GetType(methodName string) (*Type, error) {
+	points := []string{p.Name, methodName}
+	addr := strings.Join(points, ".")
+	if method, ok := p.Types[addr]; ok {
+		return method, nil
+	}
+	return nil, errors.Wrap(ErrNotFound, "Type with addrs %q not found", addr)
+}
+
+// GetStruct attempts to return Struct reference declared in Package.
+func (p *Package) GetStruct(methodName string) (*Struct, error) {
+	points := []string{p.Name, methodName}
+	addr := strings.Join(points, ".")
+	if method, ok := p.Structs[addr]; ok {
+		return method, nil
+	}
+	return nil, errors.Wrap(ErrNotFound, "Struct with addrs %q not found", addr)
+}
+
+// GetInterface attempts to return interface reference declared in Package.
+func (p *Package) GetInterface(methodName string) (*Interface, error) {
+	points := []string{p.Name, methodName}
+	addr := strings.Join(points, ".")
+	if method, ok := p.Interfaces[addr]; ok {
+		return method, nil
+	}
+	return nil, errors.Wrap(ErrNotFound, "Interface with addrs %q not found", addr)
+}
+
+// GetFunctionFor attempts to return Function reference for giving package function declared
+// in Package, from Package.Functions dictionary.
+func (p *Package) GetFunctionFor(methodName string) (*Function, error) {
+	points := []string{p.Name, methodName}
+	addr := strings.Join(points, ".")
+	if method, ok := p.Functions[addr]; ok {
+		return method, nil
+	}
+	return nil, errors.Wrap(ErrNotFound, "function with addrs %q not found", addr)
+}
+
+// GetMethodFor attempts to return Function reference for giving method associated
+// with type from Package.Methods dictionary.
+func (p *Package) GetMethodFor(typeName string, methodName string) (*Function, error) {
+	points := []string{p.Name, typeName, methodName}
+	addr := strings.Join(points, ".")
+	if method, ok := p.Methods[addr]; ok {
+		return method, nil
+	}
+	return nil, errors.Wrap(ErrNotFound, "method with addrs %q not found", addr)
+}
+
+// GetReferenceByArchs returns a giving reference by targeting by map of architecture.
+func (p *Package) GetReferenceByArchs(ref string, archs map[string]bool, cgo bool) (Expr, error) {
+	for k := range archs {
+		if cgo {
+			if pm, err := p.CgoPackages.GetArch(k, p.Name).GetReference(ref); err == nil {
+				return pm, nil
+			}
+			continue
+		}
+
+		if pm, err := p.NormalPackages.GetArch(k, p.Name).GetReference(ref); err == nil {
+			return pm, nil
+		}
+	}
+
+	return p.GetReference(ref)
+}
+
+// GetReferenceByArch returns a giving reference by targeting by platform.
+func (p *Package) GetReferenceByArch(ref string, arch string, cgo bool) (Expr, error) {
+	if cgo {
+		if pm, err := p.CgoPackages.GetArch(arch, p.Name).GetReference(ref); err == nil {
+			return pm, nil
+		}
+	}
+
+	if pm, err := p.NormalPackages.GetArch(arch, p.Name).GetReference(ref); err == nil {
+		return pm, nil
+	}
+
+	return p.GetReference(ref)
+}
+
+// GetReferenceByPlatform returns a giving reference by targeting by platform.
+func (p *Package) GetReferenceByPlatform(ref string, platform string, cgo bool) (Expr, error) {
+	if cgo {
+		if pm, err := p.CgoPackages.GetPlatform(platform, p.Name).GetReference(ref); err == nil {
+			return pm, nil
+		}
+	}
+	if pm, err := p.NormalPackages.GetPlatform(platform, p.Name).GetReference(ref); err == nil {
+		return pm, nil
+	}
+	return p.GetReference(ref)
+}
+
+// GetReference returns giving Expr which matches giving reference.
+func (p *Package) GetReference(ref string) (Expr, error) {
+	if target, ok := p.Interfaces[ref]; ok {
+		return target, nil
+	}
+
+	if target, ok := p.Structs[ref]; ok {
+		return target, nil
+	}
+
+	if target, ok := p.Types[ref]; ok {
+		return target, nil
+	}
+
+	if target, ok := p.Functions[ref]; ok {
+		return target, nil
+	}
+
+	if target, ok := p.Variables[ref]; ok {
+		return target, nil
+	}
+
+	if target, ok := p.Constants[ref]; ok {
+		return target, nil
+	}
+
+	if target, ok := p.Methods[ref]; ok {
+		return target, nil
+	}
+
+	if pm, err := p.NormalPackages.GetReference(ref); err == nil {
+		return pm, nil
+	}
+
+	if pm, err := p.CgoPackages.GetReference(ref); err == nil {
+		return pm, nil
+	}
+
+	return nil, errors.Wrap(ErrNotFound, "reference %q not found in %q", ref, p.Name)
+}
+
+// Add adds giving declaration into package declaration
+// types according to it's class.
+func (p *Package) Add(obj interface{}) error {
+	switch elem := obj.(type) {
+	case Doc:
+		p.Docs = append(p.Docs, elem)
+		return nil
+	case *Package:
+		p.Depends = append(p.Depends, elem)
+		return nil
+	case *Type:
+		return p.addType(elem)
+	case *Interface:
+		return p.addInterface(elem)
+	case *Struct:
+		return p.addStruct(elem)
+	case *Function:
+		return p.addFunction(elem)
+	case *Variable:
+		return p.addVariable(elem)
+	}
+
+	return errors.New("unable to add type %T", obj)
+}
+
+// Resolve takes the list of indexed packages to internal structures
+// to resolve imported or internal types that they Pathway. This is
+// used to ensure all package structures have direct link to parsed
+// type.
+func (p *Package) Resolve(indexed map[string]*Package) error {
+	for _, dependent := range p.Depends {
+		if err := dependent.Resolve(indexed); err != nil {
+			return err
+		}
+	}
+
+	// if we were previously resolved, then skip.
+	if p.resolved {
+		return nil
+	}
+
+	// set resolution to true.
+	p.resolved = true
+
+	for _, str := range p.baseResolvers {
+		if err := str.Resolve(indexed); err != nil {
+			return err
+		}
+	}
+	for _, str := range p.namedResolvers {
+		if err := str.Resolve(indexed); err != nil {
+			return err
+		}
+	}
+	for _, str := range p.varResolvers {
+		if err := str.Resolve(indexed); err != nil {
+			return err
+		}
+	}
+	for _, str := range p.blockResolvers {
+		if err := str.Resolve(indexed); err != nil {
+			return err
+		}
+	}
+	for _, str := range p.postResolvers {
+		if err := str(indexed); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *Package) addFunction(elem *Function) error {
+	p.blockResolvers = append(p.blockResolvers, elem)
+
+	// If it has cgo architecture constraints, then add into individual
+	// architecture map.
+	if elem.IsArchSpecific() && elem.IsCgoSpecific() {
+		for k := range elem.Archs {
+			p.CgoPackages.GetArch(k, p.Name).addFunction(elem)
+		}
+		return nil
+	}
+
+	// If it has architecture constraints, then add into individual
+	// architecture map.
+	if elem.IsArchSpecific() && !elem.IsCgoSpecific() {
+		for k := range elem.Archs {
+			p.NormalPackages.GetArch(k, p.Name).addFunction(elem)
+		}
+		return nil
+	}
+
+	// If it has cgo platform constraints, then add into individual
+	// architecture map.
+	if elem.IsPlatformSpecific() && elem.IsCgoSpecific() {
+		for k := range elem.Platforms {
+			p.CgoPackages.GetPlatform(k, p.Name).addFunction(elem)
+		}
+		return nil
+	}
+
+	// If it has platform constraints, then add into individual
+	// architecture map.
+	if elem.IsPlatformSpecific() && !elem.IsCgoSpecific() {
+		for k := range elem.Platforms {
+			p.NormalPackages.GetPlatform(k, p.Name).addFunction(elem)
+		}
+		return nil
+	}
+
+	if elem.IsMethod {
+		p.Methods[elem.Addr()] = elem
+
+		// If it has a receiver instance name then add to methods with receivers.
+		if elem.ReceiverName != "" {
+			p.MethodByReceiver[elem.ReceiverAddr] = elem
+		}
+
+		return nil
+	}
+
+	p.Functions[elem.Addr()] = elem
+	return nil
+}
+
+func (p *Package) addType(elem *Type) error {
+	p.namedResolvers = append(p.namedResolvers, elem)
+
+	// If it has cgo architecture constraints, then add into individual
+	// architecture map.
+	if elem.IsArchSpecific() && elem.IsCgoSpecific() {
+		for k := range elem.Archs {
+			p.CgoPackages.GetArch(k, p.Name).addType(elem)
+		}
+		return nil
+	}
+
+	// If it has architecture constraints, then add into individual
+	// architecture map.
+	if elem.IsArchSpecific() && !elem.IsCgoSpecific() {
+		for k := range elem.Archs {
+			p.NormalPackages.GetArch(k, p.Name).addType(elem)
+		}
+		return nil
+	}
+
+	// If it has cgo platform constraints, then add into individual
+	// architecture map.
+	if elem.IsPlatformSpecific() && elem.IsCgoSpecific() {
+		for k := range elem.Platforms {
+			p.CgoPackages.GetPlatform(k, p.Name).addType(elem)
+		}
+		return nil
+	}
+
+	// If it has platform constraints, then add into individual
+	// architecture map.
+	if elem.IsPlatformSpecific() && !elem.IsCgoSpecific() {
+		for k := range elem.Platforms {
+			p.NormalPackages.GetPlatform(k, p.Name).addType(elem)
+		}
+		return nil
+	}
+
+	p.Types[elem.Addr()] = elem
+	return nil
+}
+
+func (p *Package) addStruct(elem *Struct) error {
+	p.baseResolvers = append(p.baseResolvers, elem)
+
+	// If it has cgo architecture constraints, then add into individual
+	// architecture map.
+	if elem.IsArchSpecific() && elem.IsCgoSpecific() {
+		for k := range elem.Archs {
+			p.CgoPackages.GetArch(k, p.Name).addStruct(elem)
+		}
+		return nil
+	}
+
+	// If it has architecture constraints, then add into individual
+	// architecture map.
+	if elem.IsArchSpecific() && !elem.IsCgoSpecific() {
+		for k := range elem.Archs {
+			p.NormalPackages.GetArch(k, p.Name).addStruct(elem)
+		}
+		return nil
+	}
+
+	// If it has cgo platform constraints, then add into individual
+	// architecture map.
+	if elem.IsPlatformSpecific() && elem.IsCgoSpecific() {
+		for k := range elem.Platforms {
+			p.CgoPackages.GetPlatform(k, p.Name).addStruct(elem)
+		}
+		return nil
+	}
+
+	// If it has platform constraints, then add into individual
+	// architecture map.
+	if elem.IsPlatformSpecific() && !elem.IsCgoSpecific() {
+		for k := range elem.Platforms {
+			p.NormalPackages.GetPlatform(k, p.Name).addStruct(elem)
+		}
+		return nil
+	}
+
+	if elem.Name == "" {
+		p.NoNameStructs = append(p.NoNameStructs, elem)
+		return nil
+	}
+
+	p.Structs[elem.Addr()] = elem
+	return nil
+}
+
+func (p *Package) addInterface(elem *Interface) error {
+	p.baseResolvers = append(p.baseResolvers, elem)
+
+	// If it has cgo architecture constraints, then add into individual
+	// architecture map.
+	if elem.IsArchSpecific() && elem.IsCgoSpecific() {
+		for k := range elem.Archs {
+			p.CgoPackages.GetArch(k, p.Name).addInterface(elem)
+		}
+		return nil
+	}
+
+	// If it has architecture constraints, then add into individual
+	// architecture map.
+	if elem.IsArchSpecific() && !elem.IsCgoSpecific() {
+		for k := range elem.Archs {
+			p.NormalPackages.GetArch(k, p.Name).addInterface(elem)
+		}
+		return nil
+	}
+
+	// If it has cgo platform constraints, then add into individual
+	// architecture map.
+	if elem.IsPlatformSpecific() && elem.IsCgoSpecific() {
+		for k := range elem.Platforms {
+			p.CgoPackages.GetPlatform(k, p.Name).addInterface(elem)
+		}
+		return nil
+	}
+
+	// If it has platform constraints, then add into individual
+	// architecture map.
+	if elem.IsPlatformSpecific() && !elem.IsCgoSpecific() {
+		for k := range elem.Platforms {
+			p.NormalPackages.GetPlatform(k, p.Name).addInterface(elem)
+		}
+		return nil
+	}
+
+	p.Interfaces[elem.Addr()] = elem
+	return nil
+}
+
+func (p *Package) addVariable(elem *Variable) error {
+	p.varResolvers = append(p.varResolvers, elem)
+
+	if elem.Blank {
+		p.Blanks = append(p.Blanks, elem)
+		return nil
+	}
+
+	// If it has cgo architecture constraints, then add into individual
+	// architecture map.
+	if elem.IsArchSpecific() && elem.IsCgoSpecific() {
+		for k := range elem.Archs {
+			p.CgoPackages.GetArch(k, p.Name).addVariable(elem)
+		}
+		return nil
+	}
+
+	// If it has architecture constraints, then add into individual
+	// architecture map.
+	if elem.IsArchSpecific() && !elem.IsCgoSpecific() {
+		for k := range elem.Archs {
+			p.NormalPackages.GetArch(k, p.Name).addVariable(elem)
+		}
+		return nil
+	}
+
+	// If it has cgo platform constraints, then add into individual
+	// architecture map.
+	if elem.IsPlatformSpecific() && elem.IsCgoSpecific() {
+		for k := range elem.Platforms {
+			p.CgoPackages.GetPlatform(k, p.Name).addVariable(elem)
+		}
+		return nil
+	}
+
+	// If it has platform constraints, then add into individual
+	// architecture map.
+	if elem.IsPlatformSpecific() && !elem.IsCgoSpecific() {
+		for k := range elem.Platforms {
+			p.NormalPackages.GetPlatform(k, p.Name).addVariable(elem)
+		}
+		return nil
+	}
+
+	if elem.Constant {
+		p.Constants[elem.Addr()] = elem
+		return nil
+	}
+
+	p.Variables[elem.Addr()] = elem
+	return nil
+}
+
+func (p *Package) addProc(res ResolverFn) {
+	p.postResolvers = append(p.postResolvers, res)
+}
+
 // Location embodies important data relating to
 // the location, column and length of declared
 // statement or expression within a source file.
@@ -82,6 +886,34 @@ type Location struct {
 	Column    int
 	ColumnEnd int
 	Source    string
+	Cgo       bool
+	Archs     map[string]bool
+	Platforms map[string]bool
+}
+
+// HasPlatform returns true/false if giving platform is supported.
+func (l *Location) HasPlatform(plat string) bool {
+	return l.Platforms[plat]
+}
+
+// HasPlatform returns true/false if giving arch is supported.
+func (l *Location) HasArch(arch string) bool {
+	return l.Archs[arch]
+}
+
+// IsCgoSpecific returns true/false if giving location data is cgo based.
+func (l *Location) IsCgoSpecific() bool {
+	return l.Cgo
+}
+
+// IsArchSpecific returns true/false if giving location data is architecture constraints.
+func (l *Location) IsArchSpecific() bool {
+	return len(l.Archs) != 0
+}
+
+// IsPlatformSpecific returns true/false if giving location data is platform specific.
+func (l *Location) IsPlatformSpecific() bool {
+	return len(l.Platforms) != 0
 }
 
 // Clone saves value of incoming Location as itself.
@@ -254,233 +1086,6 @@ func (g *GroupStmt) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
-// PackageFile defines a giving package file with it's associated
-// definitions, constructs and declarations. It provides the
-// one-to-one relation of a parsed package.
-type PackageFile struct {
-	Name    string
-	File    string
-	Dir     string
-	Docs    []Doc
-	Imports map[string]Import
-}
-
-// Package embodies a parsed Golang/Go based package,
-// with it's information and package files, which embody
-// it's declarations, types and constructs.
-type Package struct {
-	Meta *loader.PackageInfo `json:"-"`
-
-	Name             string
-	Docs             []Doc
-	Blanks           []*Variable
-	BadDeclrs        []*BadExpr
-	Depends          []*Package
-	NoNameStructs    []*Struct
-	Variables        map[string]*Variable
-	Constants        map[string]*Variable
-	Types            map[string]*Type
-	Structs          map[string]*Struct
-	Interfaces       map[string]*Interface
-	Functions        map[string]*Function
-	Methods          map[string]*Function
-	MethodByReceiver map[string]*Function
-	Files            map[string]*PackageFile
-
-	// set of resolvers which are layered out in
-	// order of calling. Block resolvers must be resolved
-	// last as they could use variables and variables resolvers
-	// must be resolved as they could refer to a struct
-	// field type.
-	baseResolvers    []Resolvable
-	namedResolvers   []Resolvable
-	varResolvers     []Resolvable
-	blockResolvers   []Resolvable
-	deferedResolvers []ResolverFn
-	resolved         bool
-}
-
-// GetConstant attempts to return Constant reference declared in Package.
-func (p *Package) GetConstant(methodName string) (*Variable, error) {
-	points := []string{p.Name, methodName}
-	addr := strings.Join(points, ".")
-	if method, ok := p.Constants[addr]; ok {
-		return method, nil
-	}
-	return nil, errors.Wrap(ErrNotFound, "Constant with addrs %q not found", addr)
-}
-
-// GetVariable attempts to return Variable reference declared in Package.
-func (p *Package) GetVariable(methodName string) (*Variable, error) {
-	points := []string{p.Name, methodName}
-	addr := strings.Join(points, ".")
-	if method, ok := p.Variables[addr]; ok {
-		return method, nil
-	}
-	return nil, errors.Wrap(ErrNotFound, "Variable with addrs %q not found", addr)
-}
-
-// GetType attempts to return Type reference declared in Package.
-func (p *Package) GetType(methodName string) (*Type, error) {
-	points := []string{p.Name, methodName}
-	addr := strings.Join(points, ".")
-	if method, ok := p.Types[addr]; ok {
-		return method, nil
-	}
-	return nil, errors.Wrap(ErrNotFound, "Type with addrs %q not found", addr)
-}
-
-// GetStruct attempts to return Struct reference declared in Package.
-func (p *Package) GetStruct(methodName string) (*Struct, error) {
-	points := []string{p.Name, methodName}
-	addr := strings.Join(points, ".")
-	if method, ok := p.Structs[addr]; ok {
-		return method, nil
-	}
-	return nil, errors.Wrap(ErrNotFound, "Struct with addrs %q not found", addr)
-}
-
-// GetInterface attempts to return interface reference declared in Package.
-func (p *Package) GetInterface(methodName string) (*Interface, error) {
-	points := []string{p.Name, methodName}
-	addr := strings.Join(points, ".")
-	if method, ok := p.Interfaces[addr]; ok {
-		return method, nil
-	}
-	return nil, errors.Wrap(ErrNotFound, "Interface with addrs %q not found", addr)
-}
-
-// GetFunctionFor attempts to return Function reference for giving package function declared
-// in Package, from Package.Functions dictionary.
-func (p *Package) GetFunctionFor(methodName string) (*Function, error) {
-	points := []string{p.Name, methodName}
-	addr := strings.Join(points, ".")
-	if method, ok := p.Functions[addr]; ok {
-		return method, nil
-	}
-	return nil, errors.Wrap(ErrNotFound, "function with addrs %q not found", addr)
-}
-
-// GetMethodFor attempts to return Function reference for giving method associated
-// with type from Package.Methods dictionary.
-func (p *Package) GetMethodFor(typeName string, methodName string) (*Function, error) {
-	points := []string{p.Name, typeName, methodName}
-	addr := strings.Join(points, ".")
-	if method, ok := p.Methods[addr]; ok {
-		return method, nil
-	}
-	return nil, errors.Wrap(ErrNotFound, "method with addrs %q not found", addr)
-}
-
-// Add adds giving declaration into package declaration
-// types according to it's class.
-func (p *Package) Add(obj interface{}) error {
-	switch elem := obj.(type) {
-	case Doc:
-		p.Docs = append(p.Docs, elem)
-		return nil
-	case *Package:
-		p.Depends = append(p.Depends, elem)
-		return nil
-	case *Type:
-		p.Types[elem.Addr()] = elem
-		p.namedResolvers = append(p.namedResolvers, elem)
-		return nil
-	case *Interface:
-		p.Interfaces[elem.Addr()] = elem
-		p.baseResolvers = append(p.baseResolvers, elem)
-		return nil
-	case *Struct:
-		if elem.Name == "" {
-			p.NoNameStructs = append(p.NoNameStructs, elem)
-			return nil
-		}
-		p.Structs[elem.Addr()] = elem
-		p.baseResolvers = append(p.baseResolvers, elem)
-		return nil
-	case *Function:
-		p.blockResolvers = append(p.blockResolvers, elem)
-
-		if elem.IsMethod {
-			p.Methods[elem.Addr()] = elem
-
-			// If it has a receiver instance name then add to methods with receivers.
-			if elem.ReceiverName != "" {
-				p.MethodByReceiver[elem.ReceiverAddr] = elem
-			}
-
-			return nil
-		}
-
-		p.Functions[elem.Addr()] = elem
-		return nil
-	case *Variable:
-		p.varResolvers = append(p.varResolvers, elem)
-
-		if elem.Blank {
-			p.Blanks = append(p.Blanks, elem)
-			return nil
-		}
-
-		if elem.Constant {
-			p.Constants[elem.Addr()] = elem
-			return nil
-		}
-
-		p.Variables[elem.Addr()] = elem
-		return nil
-	}
-
-	return errors.New("unable to add type %T", obj)
-}
-
-// Resolve takes the list of indexed packages to internal structures
-// to resolve imported or internal types that they Pathway. This is
-// used to ensure all package structures have direct link to parsed
-// type.
-func (p *Package) Resolve(indexed map[string]*Package) error {
-	for _, dependent := range p.Depends {
-		if err := dependent.Resolve(indexed); err != nil {
-			return err
-		}
-	}
-
-	// if we were previously resolved, then skip.
-	if p.resolved {
-		return nil
-	}
-
-	// set resolution to true.
-	p.resolved = true
-
-	for _, str := range p.baseResolvers {
-		if err := str.Resolve(indexed); err != nil {
-			return err
-		}
-	}
-	for _, str := range p.namedResolvers {
-		if err := str.Resolve(indexed); err != nil {
-			return err
-		}
-	}
-	for _, str := range p.varResolvers {
-		if err := str.Resolve(indexed); err != nil {
-			return err
-		}
-	}
-	for _, str := range p.blockResolvers {
-		if err := str.Resolve(indexed); err != nil {
-			return err
-		}
-	}
-	for _, str := range p.deferedResolvers {
-		if err := str(indexed); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // ReturnsExpr represents a giving return statement.
 type ReturnsExpr struct {
 	Commentaries
@@ -489,7 +1094,7 @@ type ReturnsExpr struct {
 	Results []Expr
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p ReturnsExpr) ID() string {
 	return "Returns"
 }
@@ -511,7 +1116,7 @@ type EmptyExpr struct {
 	Implicit bool
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p EmptyExpr) ID() string {
 	return "go"
 }
@@ -535,7 +1140,7 @@ type GoExpr struct {
 	Fn *CallExpr
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p GoExpr) ID() string {
 	return "go"
 }
@@ -551,7 +1156,7 @@ func (p *GoExpr) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
-// CHanDir defines direction type of giving declared
+// ChanDir defines direction type of giving declared
 // or called channel.
 type ChanDir int
 
@@ -567,7 +1172,7 @@ type ChanDirExpr struct {
 	Location
 
 	Dir      ChanDir
-	Receiver Identity
+	Receiver Expr
 }
 
 // Expr returns rendered string representation of giving type.
@@ -576,7 +1181,7 @@ func (p ChanDirExpr) Expr() string {
 	return ""
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p ChanDirExpr) ID() string {
 	return "Assign"
 }
@@ -591,11 +1196,10 @@ type AssignExpr struct {
 	Commentaries
 	Location
 
-	Left  []Identity
-	Right []Identity
+	Pairs []VariableValuePair
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p AssignExpr) ID() string {
 	return "Assign"
 }
@@ -616,11 +1220,11 @@ type IndexExpr struct {
 	Commentaries
 	Location
 
-	Elem  Identity
+	Elem  Expr
 	Index string
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p IndexExpr) ID() string {
 	return "IndexExpr"
 }
@@ -641,11 +1245,11 @@ type TypeAssert struct {
 	Commentaries
 	Location
 
-	X    Identity
-	Type Identity
+	X    Expr
+	Type Expr
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p TypeAssert) ID() string {
 	return "TypeAssert"
 }
@@ -670,9 +1274,9 @@ type StmtExpr struct {
 	X Expr
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p StmtExpr) ID() string {
-	return "if"
+	return ""
 }
 
 // Expr returns rendered string representation of giving type.
@@ -697,9 +1301,9 @@ type IncDecExpr struct {
 	Dec    bool
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p IncDecExpr) ID() string {
-	return "if"
+	return ""
 }
 
 // Expr returns rendered string representation of giving type.
@@ -723,9 +1327,9 @@ type LabeledExpr struct {
 	Stmt  Expr
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p LabeledExpr) ID() string {
-	return "if"
+	return ""
 }
 
 // Expr returns rendered string representation of giving type.
@@ -747,9 +1351,9 @@ type SelectExpr struct {
 	Body *GroupStmt
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p SelectExpr) ID() string {
-	return "if"
+	return ""
 }
 
 // Expr returns rendered string representation of giving type.
@@ -773,9 +1377,9 @@ type SendExpr struct {
 	Value Expr
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p SendExpr) ID() string {
-	return "if"
+	return ""
 }
 
 // Expr returns rendered string representation of giving type.
@@ -800,9 +1404,9 @@ type TypeSwitchExpr struct {
 	Assign Expr
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p TypeSwitchExpr) ID() string {
-	return "if"
+	return "TypeSwitchExpr"
 }
 
 // Expr returns rendered string representation of giving type.
@@ -821,12 +1425,12 @@ func (p *TypeSwitchExpr) Resolve(indexed map[string]*Package) error {
 type DeclrExpr struct {
 	Commentaries
 	Location
-	Declr Identity
+	Declr []Expr
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p DeclrExpr) ID() string {
-	return "if"
+	return "DeclrExpr"
 }
 
 // Expr returns rendered string representation of giving type.
@@ -846,12 +1450,12 @@ type BranchExpr struct {
 	Commentaries
 	Location
 
-	Label Identity
+	Label Expr
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p BranchExpr) ID() string {
-	return "if"
+	return ""
 }
 
 // Expr returns rendered string representation of giving type.
@@ -873,9 +1477,9 @@ type DeferExpr struct {
 	Fn *CallExpr
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p DeferExpr) ID() string {
-	return "if"
+	return ""
 }
 
 // Expr returns rendered string representation of giving type.
@@ -894,11 +1498,11 @@ type CallExpr struct {
 	Commentaries
 	Location
 
-	Func      Identity
-	Arguments []Identity
+	Func      Expr
+	Arguments []Expr
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p CallExpr) ID() string {
 	return p.Func.ID()
 }
@@ -925,7 +1529,7 @@ type RangeExpr struct {
 	Body  *GroupStmt
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p RangeExpr) ID() string {
 	return "Range"
 }
@@ -952,7 +1556,7 @@ type ForExpr struct {
 	Post Expr
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p ForExpr) ID() string {
 	return "for"
 }
@@ -968,15 +1572,42 @@ func (p *ForExpr) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
+// UnknownExpr represents giving Range expression.
+type UnknownExpr struct {
+	Location
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p UnknownExpr) Expr() string {
+	return ""
+}
+
+// ID implements Expr.
+func (p UnknownExpr) ID() string {
+	return "UnknownExpr"
+}
+
+// Resolve implements Resolvable interface.
+func (p *UnknownExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
 // ParenExpr represents giving Range expression.
 type ParenExpr struct {
 	Commentaries
 	Location
 
-	Elem Identity
+	Elem Expr
 }
 
-// ID implements Identity.
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p ParenExpr) Expr() string {
+	return ""
+}
+
+// ID implements Expr.
 func (p ParenExpr) ID() string {
 	return "ParenExpr"
 }
@@ -992,11 +1623,11 @@ type BinaryExpr struct {
 	Location
 
 	Op    string
-	Left  Identity
-	Right Identity
+	Left  Expr
+	Right Expr
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p BinaryExpr) ID() string {
 	return p.Op
 }
@@ -1023,7 +1654,7 @@ type SymbolExpr struct {
 	Symbol rune
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p SymbolExpr) ID() string {
 	return string(p.Symbol)
 }
@@ -1047,7 +1678,7 @@ type PropertyMethodGetExpr struct {
 	Method *Function
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p PropertyMethodGetExpr) ID() string {
 	return "PropertyMethodGet"
 }
@@ -1065,7 +1696,7 @@ type PropertyGetExpr struct {
 	Property *Field
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p PropertyGetExpr) ID() string {
 	return "PropertyGet"
 }
@@ -1086,9 +1717,9 @@ type SwitchExpr struct {
 	Tag  Expr
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p SwitchExpr) ID() string {
-	return "if"
+	return ""
 }
 
 // Expr returns rendered string representation of giving type.
@@ -1114,7 +1745,7 @@ type IfExpr struct {
 	Cond Expr
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p IfExpr) ID() string {
 	return "if"
 }
@@ -1139,7 +1770,7 @@ type BadExpr struct {
 	Location
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p BadExpr) ID() string {
 	return ""
 }
@@ -1155,6 +1786,72 @@ func (p *BadExpr) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
+// VariableValuePair represents a variable-value pair declaration usually in a function body.
+type VariableValuePair struct {
+	Location
+
+	// Key defines the key name used for giving key pair.
+	Key Expr
+
+	// Value represents type and value associated with key pair.
+	Value Expr
+}
+
+// ID implements Expr.
+func (p VariableValuePair) ID() string {
+	return ""
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p VariableValuePair) Expr() string {
+	return ""
+}
+
+// Value represents a a declared variable without it's value.
+type Value struct {
+	Location
+	Value Expr
+}
+
+// Expr returns string representation of giving type.
+func (p Value) Expr() string {
+	return ""
+}
+
+// ID implements Expr.
+func (p Value) ID() string {
+	return "Value"
+}
+
+// Resolve implements Resolvable interface.
+func (p *Value) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
+// Key represents a a declared variable without it's value.
+type Key struct {
+	Location
+
+	Name string
+	Type Expr
+}
+
+// Expr returns string representation of giving type.
+func (p Key) Expr() string {
+	return ""
+}
+
+// ID implements Expr.
+func (p Key) ID() string {
+	return "Key"
+}
+
+// Resolve implements Resolvable interface.
+func (p *Key) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
 // KeyValuePair represents a key-value pair declaration usually in
 // a map.
 type KeyValuePair struct {
@@ -1162,10 +1859,10 @@ type KeyValuePair struct {
 	Commentaries
 
 	// Key defines the key name used for giving key pair.
-	Key Identity
+	Key Expr
 
 	// Value represents type and value associated with key pair.
-	Value Identity
+	Value Expr
 }
 
 // Expr returns string representation of giving type.
@@ -1173,7 +1870,7 @@ func (p KeyValuePair) Expr() string {
 	return ""
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p KeyValuePair) ID() string {
 	return "KeyPair"
 }
@@ -1190,7 +1887,7 @@ type DeclaredValue struct {
 	Location
 
 	// Fields holds all declared field and value of a declared expression.
-	Values []Identity
+	Values []Expr
 
 	// resolver provides a means of the indexer to provide a custom resolving
 	// function which will run internal logic to set giving values
@@ -1199,8 +1896,14 @@ type DeclaredValue struct {
 	resolved bool
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p DeclaredValue) ID() string {
+	return ""
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p DeclaredValue) Expr() string {
 	return ""
 }
 
@@ -1232,11 +1935,11 @@ type DeclaredStructValue struct {
 	// Values contains all values provided according to declaration
 	// order when a struct field values are supplied without using
 	// the field name.  {"Bob", "Juge"}
-	Values []Identity
+	Values []Expr
 
 	// Fields contains all values and field names declared in the
 	// format e.g {Name:"Bob", Addr:"Juge"}.
-	Fields map[string]Identity
+	Fields map[string]Expr
 
 	// resolver provides a means of the indexer to provide a custom resolving
 	// function which will run internal logic to set giving values
@@ -1245,8 +1948,14 @@ type DeclaredStructValue struct {
 	resolved bool
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p DeclaredStructValue) ID() string {
+	return ""
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p DeclaredStructValue) Expr() string {
 	return ""
 }
 
@@ -1275,7 +1984,7 @@ type DeclaredListValue struct {
 	Text string
 
 	// Fields holds all declared field and value of a declared expression.
-	Values []Identity
+	Values []Expr
 
 	// resolver provides a means of the indexer to provide a custom resolving
 	// function which will run internal logic to set giving values
@@ -1284,9 +1993,15 @@ type DeclaredListValue struct {
 	resolved bool
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p DeclaredListValue) ID() string {
 	return p.Text
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p DeclaredListValue) Expr() string {
+	return ""
 }
 
 // Resolve implements Resolvable interface.
@@ -1320,9 +2035,15 @@ type DeclaredMapValue struct {
 	resolved bool
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p DeclaredMapValue) ID() string {
 	return p.Text
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p DeclaredMapValue) Expr() string {
+	return ""
 }
 
 // Resolve implements Resolvable interface.
@@ -1353,9 +2074,15 @@ type BaseValue struct {
 	resolved bool
 }
 
-// ID implements Identity.
+// ID implements Expr.
 func (p BaseValue) ID() string {
 	return p.Value
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p BaseValue) Expr() string {
+	return ""
 }
 
 // Resolve implements Resolvable interface.
@@ -1383,10 +2110,10 @@ type Map struct {
 	Exported bool
 
 	// KeyType sets the key type for giving map type.
-	KeyType Identity
+	KeyType Expr
 
 	// ValueType sets the value type for giving map type.
-	ValueType Identity
+	ValueType Expr
 
 	// resolver provides a means of the indexer to provide a custom resolving
 	// function which will run internal logic to set giving values
@@ -1395,7 +2122,7 @@ type Map struct {
 	resolved bool
 }
 
-// ID implements Identity interface.
+// ID implements Expr interface.
 func (p Map) ID() string {
 	return "Map"
 }
@@ -1444,7 +2171,7 @@ type List struct {
 	Exported bool
 
 	// Type sets the value object/declared type.
-	Type Identity
+	Type Expr
 
 	// Meta provides associated package  and commentary information related to
 	// giving type.
@@ -1457,7 +2184,7 @@ type List struct {
 	resolved bool
 }
 
-// ID implements Identity interface.
+// ID implements Expr interface.
 func (p List) ID() string {
 	return "List"
 }
@@ -1497,7 +2224,7 @@ type Channel struct {
 	Exported bool
 
 	// Type sets the value object/declared type.
-	Type Identity
+	Type Expr
 
 	// resolver provides a means of the indexer to provide a custom resolving
 	// function which will run internal logic to set giving values
@@ -1506,7 +2233,7 @@ type Channel struct {
 	resolved bool
 }
 
-// ID implements Identity interface.
+// ID implements Expr interface.
 func (p Channel) ID() string {
 	return "Channel"
 }
@@ -1536,43 +2263,6 @@ func (p *Channel) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
-// DePointer represents a golang pointer dereference expression which include
-// strings, int types, floats, complex, etc, which are
-// atomic indivisible types.
-type DePointer struct {
-	Location
-	Commentaries
-
-	// Name represents the name of giving type.
-	Name string
-
-	// Elem contains associated type the star(*) is trying to dereference.
-	Elem Identity
-}
-
-// Expr returns string representation of giving type.
-func (p DePointer) Expr() string {
-	return ""
-}
-
-// SetID sets n to Name field value.
-func (p *DePointer) SetID(n string) {
-	p.Name = n
-}
-
-// ID implements the Identity interface.
-func (p DePointer) ID() string {
-	return "*" + p.Elem.ID()
-}
-
-// Resolve takes the list of indexed packages to internal structures
-// to resolve imported or internal types that they Pathwayerence. This is
-// used to ensure all package structures have direct link to parsed
-// type.
-func (p *DePointer) Resolve(indexed map[string]*Package) error {
-	return nil
-}
-
 // OpOf represents a golang type which is being applied
 // an operation using a operator prefix, which means to get pointer of type.
 type OpOf struct {
@@ -1586,7 +2276,7 @@ type OpOf struct {
 	OpFlag int
 
 	// Elem contains associated type the pointer represents.
-	Elem Identity
+	Elem Expr
 }
 
 // Expr returns string representation of giving type.
@@ -1594,7 +2284,7 @@ func (p OpOf) Expr() string {
 	return ""
 }
 
-// ID implements the Identity interface.
+// ID implements the Expr interface.
 func (p OpOf) ID() string {
 	return p.Op + p.Elem.ID()
 }
@@ -1617,7 +2307,7 @@ type AddressOf struct {
 	Name string
 
 	// Elem contains associated type the pointer represents.
-	Elem Identity
+	Elem Expr
 }
 
 // Expr returns string representation of giving type.
@@ -1630,7 +2320,7 @@ func (p *AddressOf) SetID(n string) {
 	p.Name = n
 }
 
-// ID implements the Identity interface.
+// ID implements the Expr interface.
 func (p AddressOf) ID() string {
 	return "AddressOf"
 }
@@ -1654,7 +2344,7 @@ type Pointer struct {
 	Name string
 
 	// Elem contains associated type the pointer represents.
-	Elem Identity
+	Elem Expr
 }
 
 // Expr returns string representation of giving type.
@@ -1667,7 +2357,7 @@ func (p *Pointer) SetID(n string) {
 	p.Name = n
 }
 
-// ID implements the Identity interface.
+// ID implements the Expr interface.
 func (p Pointer) ID() string {
 	return "*" + p.Elem.ID()
 }
@@ -1708,7 +2398,7 @@ func (p Base) Expr() string {
 	return ""
 }
 
-// ID implements the Identity interface.
+// ID implements the Expr interface.
 func (p Base) ID() string {
 	return p.Name
 }
@@ -1729,7 +2419,7 @@ type Variable struct {
 	Commentaries
 
 	// Type sets the value object/declared type.
-	Type Identity
+	Type Expr
 
 	// Value defines giving value of variable.
 	Value interface{}
@@ -1772,7 +2462,7 @@ func (p Variable) Expr() string {
 	return ""
 }
 
-// ID implements Identity interface.
+// ID implements Expr interface.
 func (p Variable) ID() string {
 	return p.Name
 }
@@ -1789,12 +2479,12 @@ func (p *Variable) Resolve(indexed map[string]*Package) error {
 
 	// set resolution to true.
 	p.resolved = true
-	if p.resolver != nil {
-		if err := p.resolver(indexed); err != nil {
-			return err
-		}
+
+	if p.resolver == nil {
+		return nil
 	}
-	return nil
+
+	return p.resolver(indexed)
 }
 
 // Field represents field types and names
@@ -1819,7 +2509,7 @@ type Field struct {
 	Meta Meta
 
 	// Type sets the value object/declared type.
-	Type Identity
+	Type Expr
 
 	// Import contains import details for giving field type used in Pathwayerence
 	// within declaration of struct.
@@ -1842,7 +2532,7 @@ func (p Field) Expr() string {
 	return ""
 }
 
-// ID implements Identity interface.
+// ID implements Expr interface.
 func (p Field) ID() string {
 	return p.Name
 }
@@ -1859,12 +2549,12 @@ func (p *Field) Resolve(indexed map[string]*Package) error {
 
 	// set resolution to true.
 	p.resolved = true
-	if p.resolver != nil {
-		if err := p.resolver(indexed); err != nil {
-			return err
-		}
+
+	if p.resolver == nil {
+		return nil
 	}
-	return nil
+
+	return p.resolver(indexed)
 }
 
 // Parameter represents argument and return types
@@ -1879,7 +2569,7 @@ type Parameter struct {
 	Name string
 
 	// Type sets the value object/declared type.
-	Type Identity
+	Type Expr
 
 	// IsVariadic indicates if giving parameter is variadic.
 	IsVariadic bool
@@ -1904,7 +2594,7 @@ func (p *Parameter) SetID(n string) {
 	p.Name = n
 }
 
-// ID implements Identity interface.
+// ID implements Expr interface.
 func (p Parameter) ID() string {
 	return p.Name
 }
@@ -1926,12 +2616,12 @@ func (p *Parameter) Resolve(indexed map[string]*Package) error {
 
 	// set resolution to true.
 	p.resolved = true
-	if p.resolver != nil {
-		if err := p.resolver(indexed); err != nil {
-			return err
-		}
+
+	if p.resolver == nil {
+		return nil
 	}
-	return nil
+
+	return p.resolver(indexed)
 }
 
 // Type defines a struct holding information about
@@ -1955,7 +2645,7 @@ type Type struct {
 	Meta Meta
 
 	// Points sets the real type which giving type declaration points to.
-	Points Identity
+	Points Expr
 
 	// Methods contains all function defined as methods attached to
 	// type instance.
@@ -1973,7 +2663,7 @@ func (p *Type) SetID(n string) {
 	p.Name = n
 }
 
-// ID implements Identity interface.
+// ID implements Expr interface.
 func (p Type) ID() string {
 	return p.Name
 }
@@ -1995,11 +2685,20 @@ func (p *Type) Resolve(indexed map[string]*Package) error {
 
 	// set resolution to true.
 	p.resolved = true
-	if p.resolver != nil {
-		if err := p.resolver(indexed); err != nil {
+	if p.resolver == nil {
+		return nil
+	}
+
+	if err := p.resolver(indexed); err != nil {
+		return err
+	}
+
+	for _, method := range p.Methods {
+		if err := method.Resolve(indexed); err != nil {
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -2045,7 +2744,7 @@ func (p *Interface) SetID(n string) {
 	p.Name = n
 }
 
-// ID implements Identity interface.
+// ID implements Expr interface.
 func (p Interface) ID() string {
 	return p.Name
 }
@@ -2062,16 +2761,20 @@ func (p *Interface) Resolve(indexed map[string]*Package) error {
 
 	// set resolution to true.
 	p.resolved = true
-	if p.resolver != nil {
-		if err := p.resolver(indexed); err != nil {
-			return err
-		}
+	if p.resolver == nil {
+		return nil
 	}
+
+	if err := p.resolver(indexed); err != nil {
+		return err
+	}
+
 	for _, method := range p.Methods {
 		if err := method.Resolve(indexed); err != nil {
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -2120,7 +2823,7 @@ func (p *Struct) SetID(n string) {
 	p.Name = n
 }
 
-// ID implements Identity interface.
+// ID implements Expr interface.
 func (p Struct) ID() string {
 	return p.Name
 }
@@ -2142,21 +2845,26 @@ func (p *Struct) Resolve(indexed map[string]*Package) error {
 
 	// set resolution to true.
 	p.resolved = true
-	if p.resolver != nil {
-		if err := p.resolver(indexed); err != nil {
-			return err
-		}
+	if p.resolver == nil {
+		return nil
 	}
+
+	if err := p.resolver(indexed); err != nil {
+		return err
+	}
+
 	for _, field := range p.Fields {
 		if err := field.Resolve(indexed); err != nil {
 			return err
 		}
 	}
+
 	for _, method := range p.Methods {
 		if err := method.Resolve(indexed); err != nil {
 			return err
 		}
 	}
+
 	return nil
 }
 
@@ -2204,7 +2912,7 @@ type Function struct {
 
 	// Owner sets the struct or interface which this function is attached
 	// to has a method.
-	Owner Identity
+	Owner Expr
 
 	// Arguments provides the argument list for giving function.
 	Arguments []Parameter
@@ -2215,6 +2923,11 @@ type Function struct {
 	// Meta provides associated package  and commentary information related to
 	// giving type.
 	Meta Meta
+
+	// Scope defines giving set of elements parsed out during processing of
+	// underline function body. It contains links to all referenced, declared
+	// types.
+	Scope map[string]Expr
 
 	// resolver provides a means of the indexer to provide a custom resolving
 	// function which will run internal logic to set giving values
@@ -2233,7 +2946,7 @@ func (p Function) Expr() string {
 	return ""
 }
 
-// ID implements Identity interface.
+// ID implements Expr interface.
 func (p Function) ID() string {
 	return p.Name
 }
@@ -2248,13 +2961,15 @@ func (p *Function) Resolve(indexed map[string]*Package) error {
 		return nil
 	}
 
-	// set resolution to true.
 	p.resolved = true
-	if p.resolver != nil {
-		if err := p.resolver(indexed); err != nil {
-			return err
-		}
+	if p.resolver == nil {
+		return nil
 	}
+
+	if err := p.resolver(indexed); err != nil {
+		return err
+	}
+
 	for _, param := range p.Returns {
 		if err := param.Resolve(indexed); err != nil {
 			return err
@@ -2266,9 +2981,14 @@ func (p *Function) Resolve(indexed map[string]*Package) error {
 		}
 	}
 
-	if p.Body == nil {
-		return nil
+	if p.Body != nil {
+		return p.Body.Resolve(indexed)
 	}
 
-	return p.Body.Resolve(indexed)
+	return nil
+}
+
+// FunctionScope embodies all declared types found within a function body.
+type FunctionScope struct {
+	Scope map[string]Expr
 }

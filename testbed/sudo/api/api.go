@@ -25,6 +25,10 @@ type RizoWalker struct {
 	Name  string
 }
 
+func (w *RizoWalker) Clone(m *RizoWalker) {
+	*w = *m
+}
+
 func (w RizoWalker) Rend() int {
 	return 1
 }
