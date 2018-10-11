@@ -37,7 +37,7 @@ func TestTransform(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, pengu3)
 	assert.NotNil(t, pengu3.Value)
-t git 
+
 	mko, err := sudo.GetVariable("mko", "")
 	assert.NoError(t, err)
 	assert.NotNil(t, mko)
