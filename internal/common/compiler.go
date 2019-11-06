@@ -2,14 +2,13 @@ package common
 
 import "go/token"
 
-import "github.com/influx6/astkit/internal/common"
 
 // ReadSource returns giving source lines and token.Position for giving target.
 // If an error occurred in attempt to load the source, the error is returned and
 // the position data as well.
 func ReadSource(t *token.FileSet, begin token.Pos, end token.Pos) ([]byte, int, token.Position, token.Position, error) {
 	length, beginPosition, endPosition := GetPosition(t, begin, end)
-	sourceLines, err := ioutil.ReadBytesFrom(beginPosition.Filename, int64(beginPosition.Offset), length)
+	sourceLines, err := ReadBytesFrom(beginPosition.Filename, int64(beginPosition.Offset), length)
 	return sourceLines, length, beginPosition, endPosition, err
 }
 
