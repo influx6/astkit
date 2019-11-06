@@ -10,8 +10,8 @@ import (
 
 	"os"
 
-	internalRuntime "github.com/gokit/astkit/internal/runtime"
-	"github.com/gokit/errors"
+	internalRuntime "github.com/influx6/astkit/internal/runtime"
+	errors "github.com/influx6/npkg/nerror"
 	"golang.org/x/tools/go/loader"
 )
 

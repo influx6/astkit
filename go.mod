@@ -1,12 +1,10 @@
-module github.com/gokit/astkit
+module github.com/influx6/astkit
+
+go 1.12
 
 require (
-	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/gokit/errors v0.0.0-20180722071056-f3491799719a
-	github.com/pmezard/go-difflib v1.0.0 // indirect
-	github.com/stretchr/testify v1.2.2
-	gitlab.com/gokit/errors v0.0.0-20180722071056-f3491799719a // indirect
-	golang.org/x/net v0.0.0-20180824152047-4bcd98cce591 // indirect
-	golang.org/x/sync v0.0.0-20180314180146-1d60e4601c6f
-	golang.org/x/tools v0.0.0-20180824175216-6c1c5e93cdc1
+	github.com/influx6/npkg v0.0.0-20191025152151-9a1f4eb01bce
+	github.com/stretchr/testify v1.4.0
+	golang.org/x/sync v0.0.0-20190911185100-cd5d95a43a6e
+	golang.org/x/tools v0.0.0-20191105231337-689d0f08e67a
 )

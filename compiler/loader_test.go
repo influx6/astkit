@@ -4,7 +4,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/gokit/astkit/compiler"
+	"github.com/influx6/astkit/compiler"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -15,11 +15,11 @@ func TestLoad(t *testing.T) {
 			"archive",
 		},
 		Imports: []string{
-			"github.com/gokit/es",
+			"github.com/influx6/es",
 		},
-	}, "github.com/gokit/astkit/testbed/sudo", runtime.GOARCH, runtime.GOOS)
+	}, "github.com/influx6/astkit/testbed/sudo", runtime.GOARCH, runtime.GOOS)
 	assert.NoError(t, err)
 	assert.NotNil(t, program)
-	assert.NotNil(t, program.Package("github.com/gokit/astkit/testbed/sudo"))
-	assert.NotNil(t, program.Package("github.com/gokit/astkit/testbed/sudo/api"))
+	assert.NotNil(t, program.Package("github.com/influx6/astkit/testbed/sudo"))
+	assert.NotNil(t, program.Package("github.com/influx6/astkit/testbed/sudo/api"))
 }

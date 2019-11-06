@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/gokit/errors"
+	errors "github.com/influx6/npkg/nerror"
 )
 
 //******************************************************************************

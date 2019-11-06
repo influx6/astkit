@@ -3,7 +3,7 @@ package astkit
 import (
 	"context"
 
-	"github.com/gokit/astkit/compiler"
+	"github.com/influx6/astkit/compiler"
 )
 
 // Transform takes provided package path returning a package
@@ -23,7 +23,7 @@ func TransformWith(ctx context.Context, pkg string, c compiler.Cg) (*compiler.Pa
 	return index.Index(ctx, pkg)
 }
 
-// TransfprmWithPreloaded takes provided package path and preloaded packages to generate package structures.
+// WithPreloaded takes provided package path and preloaded packages to generate package structures.
 func TransformWithPreloaded(ctx context.Context, pkg string, c compiler.Cg, preloaded map[string]*compiler.Package) (*compiler.Package, map[string]*compiler.Package, error) {
 	index := compiler.PreloadedIndexer(c, preloaded)
 	return index.Index(ctx, pkg)

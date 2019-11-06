@@ -1,8 +1,8 @@
-package compiler
+package common
 
 import "go/token"
 
-import "github.com/gokit/astkit/internal/ioutil"
+import "github.com/influx6/astkit/internal/common"
 
 // ReadSource returns giving source lines and token.Position for giving target.
 // If an error occurred in attempt to load the source, the error is returned and

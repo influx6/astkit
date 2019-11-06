@@ -3,7 +3,7 @@ package sudo
 import (
 	"fmt"
 
-	"github.com/gokit/astkit/testbed/sudo/api"
+	"github.com/influx6/astkit/testbed/sudo/api"
 )
 
 const roook = "Roock"

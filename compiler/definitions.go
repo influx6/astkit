@@ -3,7 +3,7 @@ package compiler
 import (
 	"strings"
 
-	"github.com/gokit/errors"
+	errors "github.com/influx6/npkg/nerror"
 )
 
 // ExprType defines a int type used to represent giving

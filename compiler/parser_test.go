@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/gokit/astkit/compiler"
+	"github.com/influx6/astkit/compiler"
 	"github.com/stretchr/testify/assert"
 )
 

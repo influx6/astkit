@@ -18,8 +18,8 @@ import (
 
 	"context"
 
-	"github.com/gokit/astkit/internal/compiler"
-	"github.com/gokit/errors"
+	"github.com/influx6/astkit/internal/common"
+	errors "github.com/influx6/npkg/nerror"
 	"golang.org/x/tools/go/loader"
 )
 
@@ -205,7 +205,7 @@ func (indexer *Indexer) indexProgram(ctx context.Context, program *loader.Progra
 // which be processed and added into provided package reference.
 func (indexer *Indexer) indexFile(ctx context.Context, eg *errgroup.Group, in chan interface{}, program *loader.Program, pkg *Package, file *ast.File, p *loader.PackageInfo) error {
 	pkgFile := new(PackageFile)
-	_, begin, end := compiler.GetPosition(program.Fset, file.Pos(), file.End())
+	_, begin, end := common.GetPosition(program.Fset, file.Pos(), file.End())
 	if begin.IsValid() {
 		pkgFile.File = filepath.ToSlash(begin.Filename)
 	} else if end.IsValid() {
@@ -1803,7 +1803,7 @@ func (b *ParseScope) handleCommentGroup(gdoc *ast.CommentGroup) (Doc, error) {
 	doc.Parts = make([]DocText, 0, len(gdoc.List))
 
 	// Set the line details of giving commentary.
-	srcd, length, begin, end := compiler.ReadSourceIfPossible(b.Program.Fset, gdoc.Pos(), gdoc.End())
+	srcd, length, begin, end := common.ReadSourceIfPossible(b.Program.Fset, gdoc.Pos(), gdoc.End())
 	var loc Location
 	loc.Source = string(srcd)
 	loc.File = begin.Filename
@@ -1826,7 +1826,7 @@ func (b *ParseScope) handleCommentGroup(gdoc *ast.CommentGroup) (Doc, error) {
 }
 
 func (b *ParseScope) handleDocText(c *ast.Comment) DocText {
-	srcd, length, begin, end := compiler.ReadSourceIfPossible(b.Program.Fset, c.Pos(), c.End())
+	srcd, length, begin, end := common.ReadSourceIfPossible(b.Program.Fset, c.Pos(), c.End())
 
 	var doc DocText
 	doc.Text = c.Text
@@ -1846,7 +1846,7 @@ func (b *ParseScope) handleDocText(c *ast.Comment) DocText {
 }
 
 func (b *ParseScope) getLocation(beginPos token.Pos, endPos token.Pos) Location {
-	srcd, length, begin, end := compiler.ReadSourceIfPossible(b.Program.Fset, beginPos, endPos)
+	srcd, length, begin, end := common.ReadSourceIfPossible(b.Program.Fset, beginPos, endPos)
 	platform, arch := getPlatformArchitecture(filepath.Base(begin.Filename))
 
 	archs := make(map[string]bool, len(b.Package.Archs)+1)

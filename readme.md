@@ -15,12 +15,12 @@ especially during processing of function bodies and variables or types which cou
 ## Install
 
 ```bash
-go get -u github.com/gokit/astkit
+go get -u github.com/influx6/astkit
 ```
 
 ## Usage
 
 ```go
 ctx := context.Background()
-sudo, imported, err := astkit.Transform(ctx, "github.com/gokit/sudo")
+sudo, imported, err := astkit.Transform(ctx, "github.com/influx6/sudo")
 ```
