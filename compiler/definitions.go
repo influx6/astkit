@@ -1773,11 +1773,38 @@ func (p *BranchExpr) Resolve(indexed map[string]*Package) error {
 	return nil
 }
 
+// SelectedCallExpr represents a selector expression used for calling
+// a type from some external or internal package, instance object or type/typeDefinition.
+// e.g App.CallMax(), App.alex()
+type SelectedCallExpr struct {
+	Commentaries
+	Location
+
+	Called *CallExpr
+}
+
+// ID implements Expr.
+func (p SelectedCallExpr) ID() string {
+	return "SelectedCallExpr"
+}
+
+// Expr returns rendered string representation of giving type.
+// It implements the Expr interface.
+func (p SelectedCallExpr) Expr() string {
+	return ""
+}
+
+// Resolve implements Resolvable interface.
+func (p *SelectedCallExpr) Resolve(indexed map[string]*Package) error {
+	return nil
+}
+
 // DeferExpr represents giving char expression like Bracket, + , -
 // Defers used in code.
 type DeferExpr struct {
 	Commentaries
 	Location
+
 	Fn *CallExpr
 }
 

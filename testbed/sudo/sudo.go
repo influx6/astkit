@@ -1,3 +1,4 @@
+// Package sudo provides a demo sudo package.
 package sudo
 
 import (

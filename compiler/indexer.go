@@ -4925,6 +4925,8 @@ func (b *ParseScope) transformSelectorExpr(parent *ast.SelectorExpr, others map[
 		return b.transformSelectorExprWithIdent(tx, parent, others)
 	case *ast.SelectorExpr:
 		return b.transformSelectorExprWithSelector(tx, parent, others)
+	case *ast.CallExpr:
+		return b.transformSelectorExprWithCallExpr(tx, parent, others)
 	}
 	return nil, errors.New("unable to handle selector with type %#v", parent.X)
 }
@@ -5010,10 +5012,38 @@ func (b *ParseScope) transformSelectorExprWithIdent(me *ast.Ident, e *ast.Select
 		return target, nil
 	}
 
-	return &UnknownExpr{
-		Error: errors.New("unable to locate reference %q", ref),
-		File:  b.Package,
-	}, nil
+	var tx, terr = b.transformIdent(me, others)
+	if terr != nil {
+		return &UnknownExpr{
+			Error: errors.Wrap(terr, "unable to locate reference %q", ref),
+			File:  b.Package,
+		}, nil
+	}
+
+	return tx, nil
+}
+
+
+func (b *ParseScope) transformSelectorExprWithCallExpr(expr *ast.CallExpr, parent *ast.SelectorExpr, others map[string]*Package) (Expr, error){
+	var val CallExpr
+	val.Location = b.getLocation(expr.Pos(), expr.End())
+
+	fnx, err := b.transformTypeFor(expr.Fun, others)
+	if err != nil {
+		return nil, err
+	}
+
+	val.Func = fnx
+
+	for _, item := range expr.Args {
+		used, err := b.transformTypeFor(item, others)
+		if err != nil {
+			return nil, err
+		}
+		val.Arguments = append(val.Arguments, used)
+	}
+
+	return &val, nil
 }
 
 func (b *ParseScope) getElementFromPackageWithObject(target *ast.Ident) (Expr, error) {
@@ -5061,16 +5091,21 @@ func (b *ParseScope) transformSelectorExprWithSelector(next *ast.SelectorExpr, p
 	ref := strings.Join([]string{b.From.Name, parts[0]}, ".")
 	targetRef, err := b.From.GetReferenceByArchs(ref, b.Package.Archs, b.Package.Cgo)
 	if err != nil {
-		return nil, errors.Wrap(err, "unable to find import with alias %q", parts[0])
+		// if we cant find reference then just create representation.
+		var tx, txerr = b.transformTypeFor(next, others)
+		if txerr != nil {
+			return nil, errors.WrapOnly(txerr)
+		}
+		return tx, nil
 	}
 
-	pelem, err := b.locateRefFromObject(parts[1:], targetRef, others)
+	pElem, err := b.locateRefFromObject(parts[1:], targetRef, others)
 	if err != nil {
 		return nil, err
 	}
 
 	if lastX == nil {
-		return pelem, nil
+		return pElem, nil
 	}
 
 	procElem, err := b.transformTypeFor(lastX.X, others)
@@ -5156,7 +5191,6 @@ func (b *ParseScope) locateRefFromPathSeries(parts []string, pkg string, others 
 
 func (b *ParseScope) locateRefFromObject(parts []string, target Expr, others map[string]*Package) (Expr, error) {
 	if target == nil {
-		//return nil, errors.New("targets %q can not be nil", parts)
 		return &UnknownExpr{
 			File:  b.Package,
 			Error: errors.New("targets %q can not be nil", parts),
