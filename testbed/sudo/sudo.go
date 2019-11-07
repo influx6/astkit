@@ -311,6 +311,9 @@ type FunctionReco struct {
 type FunctionResult struct {
 	Field string
 	Day   int
+	Ball  struct {
+		Name string
+	}
 }
 
 func (f FunctionResult) hello(fn Functioner) {
