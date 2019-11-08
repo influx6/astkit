@@ -64,8 +64,9 @@ func TestTransform(t *testing.T) {
 	assert.NotNil(t, fnres)
 	assert.NotNil(t, fnres.Fields["Field"])
 	assert.NotNil(t, fnres.Fields["Day"])
+	assert.NotNil(t, fnres.Fields["Ball"])
+	assert.NotNil(t, fnres.Methods["hello"])
 	assert.Equal(t, "int", fnres.Fields["Day"].Type.ID())
 	assert.Equal(t, "string", fnres.Fields["Field"].Type.ID())
-	assert.NotNil(t, fnres.Methods["hello"])
 	assert.Equal(t, "fn", fnres.Methods["hello"].Arguments[0].Name)
 }
