@@ -5270,8 +5270,15 @@ func (b *ParseScope) locateRefFromPackage(target string, pkg string, others map[
 		if tm, err := targetPackage.GetReferenceByArchs(ref, b.Package.Archs, b.Package.Cgo); err == nil {
 			return tm, nil
 		}
-		return nil, errors.New("failed to find %q in %q", target, pkg)
+		
+		return &UnknownExpr{
+			File:  b.Package,
+			Error: errors.New("failed to find %q in %q", target, pkg),
+		}, nil
 	}
 
-	return nil, errors.New("unable to find package %q in indexed", pkg)
+	return &UnknownExpr{
+		File:  b.Package,
+		Error: errors.New("unable to find package %q in indexed", pkg),
+	}, nil
 }
