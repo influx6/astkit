@@ -1906,6 +1906,7 @@ func (p *ForExpr) Resolve(indexed map[string]*Package) error {
 // UnknownExpr represents giving Range expression.
 type UnknownExpr struct {
 	Location
+	Target interface{}
 	Error error
 	File  *PackageFile
 }

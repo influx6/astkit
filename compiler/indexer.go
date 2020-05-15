@@ -74,20 +74,6 @@ func (indexer *Indexer) Index(ctx context.Context, pkg string) (*Package, map[st
 		return nil, nil, err
 	}
 
-	for platform, archs := range indexer.C.ExtraArchs {
-		for _, arch := range archs {
-			if arch == indexer.C.GoArch && platform == indexer.C.GOOS {
-				continue
-			}
-
-			if _, err := indexer.indexArchAndPlatform(ctx, pkg, arch, platform); err != nil {
-				if indexer.C.PlatformError != nil {
-					indexer.C.PlatformError(err, arch, platform)
-				}
-			}
-		}
-	}
-
 	indexer.waiter.Wait()
 
 	// Resolve all package dependencies with
@@ -2990,6 +2976,7 @@ func (b *ParseScope) runScopeTree(base *ast.Ident, path string) (Expr, error) {
 	if !ok {
 		return &UnknownExpr{
 			File:  b.Package,
+			Target: base,
 			Error: errors.New("property %q in %q not found in scope tree %q", base.Name, path),
 		}, nil
 	}
@@ -4389,6 +4376,7 @@ func (b *ParseScope) locateReferencedExpr(location typeExpr, others map[string]*
 
 	return &UnknownExpr{
 		File:  b.Package,
+		Target: location,
 		Error: errors.New("unable to locate referenced type: %#v", location),
 	}, nil
 }
@@ -5017,6 +5005,7 @@ func (b *ParseScope) transformSelectorExprWithIdent(me *ast.Ident, e *ast.Select
 		return &UnknownExpr{
 			Error: errors.Wrap(terr, "unable to locate reference %q", ref),
 			File:  b.Package,
+			Target: me,
 		}, nil
 	}
 
@@ -5193,6 +5182,7 @@ func (b *ParseScope) locateRefFromObject(parts []string, target Expr, others map
 	if target == nil {
 		return &UnknownExpr{
 			File:  b.Package,
+			Target: target,
 			Error: errors.New("targets %q can not be nil", parts),
 		}, nil
 	}
@@ -5260,25 +5250,25 @@ func (b *ParseScope) locateRefFromObject(parts []string, target Expr, others map
 	//return nil, errors.New("unable to locate any of provided set %+q in %T", parts, target)
 	return &UnknownExpr{
 		File:  b.Package,
+		Target: target,
 		Error: errors.New("unable to locate any of provided set %+q in %T", parts, target),
 	}, nil
 }
 
 func (b *ParseScope) locateRefFromPackage(target string, pkg string, others map[string]*Package) (Expr, error) {
+	var targetErr = errors.New("unable to find package %q in indexed", pkg)
 	if targetPackage, ok := others[pkg]; ok {
 		ref := strings.Join([]string{targetPackage.Name, target}, ".")
 		if tm, err := targetPackage.GetReferenceByArchs(ref, b.Package.Archs, b.Package.Cgo); err == nil {
 			return tm, nil
 		}
 		
-		return &UnknownExpr{
-			File:  b.Package,
-			Error: errors.New("failed to find %q in %q", target, pkg),
-		}, nil
+		targetErr = errors.New("failed to find %q in %q", target, pkg)
 	}
 
 	return &UnknownExpr{
 		File:  b.Package,
-		Error: errors.New("unable to find package %q in indexed", pkg),
+		Target: target,
+		Error: targetErr,
 	}, nil
 }

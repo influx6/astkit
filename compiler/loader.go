@@ -38,13 +38,6 @@ type Cg struct {
 	// build and structure data.
 	GOOS string
 
-	// ExtraArchs is a map expected to be used to indicate processing of more
-	// golang supported platforms and a slice of architectures those platforms
-	// should be processed for. It is distinct from the Cg.GoAech and Cg.GOOS
-	// fields as it indicates you wish to add this platform structures into
-	// built data. It comes will added time cost.
-	ExtraArchs map[string][]string
-
 	// PackgeDir sets the absolute path to be used for resolving
 	// relative path names by the loader.Config. It is used to
 	// set the loader.Config.Cwd.
